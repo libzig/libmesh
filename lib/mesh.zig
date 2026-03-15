@@ -34,6 +34,27 @@ pub fn lookupPeer(store: *store_mod.InMemoryStore, signer_public_key: libself.id
     return service.lookup(node_id);
 }
 
+pub fn lookupPeerAt(
+    store: *store_mod.InMemoryStore,
+    signer_public_key: libself.identity.PublicKey,
+    node_id: libself.NodeId,
+    now_ms: u64,
+) MeshError!PeerRecord {
+    const service = discovery.Service{
+        .store = store,
+        .signer_public_key = signer_public_key,
+    };
+    return service.lookupAt(node_id, now_ms);
+}
+
+pub fn expirePeers(store: *store_mod.InMemoryStore, signer_public_key: libself.identity.PublicKey, now_ms: u64) usize {
+    const service = discovery.Service{
+        .store = store,
+        .signer_public_key = signer_public_key,
+    };
+    return service.expire(now_ms);
+}
+
 pub fn signalPeer(
     exchange: *signaling_exchange.Exchange,
     rendezvous: *signaling_rendezvous.Rendezvous,
@@ -161,4 +182,31 @@ test "mesh API opens relay routes and resolves routes" {
     const plan = try resolveRoutes(std.testing.allocator, resolved, .{});
     defer plan.deinit(std.testing.allocator);
     try std.testing.expectEqual(routing_policy.Decision.direct, plan.decision);
+}
+
+test "mesh API supports freshness-aware lookup and expiry pruning" {
+    var store = store_mod.InMemoryStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const key_pair = try libself.identity.KeyPair.fromSeed([_]u8{0x8b} ** 32);
+    const endpoints = [_]@import("peer/endpoint.zig").PublishedEndpoint{
+        .{ .host = "203.0.113.121", .port = 4433 },
+    };
+    const hints = [_]@import("peer/relay_hint.zig").RelayHint{
+        .{ .relay_id = "relay-api-expire", .relay_address = "relay.example.net:4433" },
+    };
+    var record = PeerRecord{
+        .node_id = libself.NodeId.fromPublicKey(key_pair.public_key),
+        .published_at_ms = 10,
+        .expires_at_ms = 20,
+        .endpoints = &endpoints,
+        .relay_hints = &hints,
+    };
+    try record.sign(std.testing.allocator, key_pair);
+    try publishSelf(&store, key_pair.public_key, record, 11);
+
+    _ = try lookupPeerAt(&store, key_pair.public_key, record.node_id, 20);
+    try std.testing.expectError(MeshError.Expired, lookupPeerAt(&store, key_pair.public_key, record.node_id, 21));
+    try std.testing.expectEqual(@as(usize, 1), expirePeers(&store, key_pair.public_key, 21));
+    try std.testing.expectError(MeshError.NotFound, lookupPeer(&store, key_pair.public_key, record.node_id));
 }
