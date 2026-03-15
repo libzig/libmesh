@@ -23,6 +23,7 @@ pub const Result = struct {
 pub const OpenSessionResult = struct {
     result: Result,
     session: libfast_adapter.Session,
+    used_relay_fallback: bool = false,
 };
 
 pub fn connect(
@@ -54,25 +55,51 @@ pub fn connectAndOpenSession(
     runtime: routing_policy.Runtime,
     driver: libfast_adapter.Driver,
 ) MeshError!OpenSessionResult {
-    const plan = try orchestrator.buildPlan(allocator, .{}, peer, runtime);
-    defer plan.deinit(allocator);
+    const primary_plan = try orchestrator.buildPlan(allocator, .{}, peer, runtime);
+    defer primary_plan.deinit(allocator);
 
-    const contract = libdice_contract.fromDecision(plan.decision);
-    try libdice_contract.validateBoundary(contract);
-    const session = try libfast_adapter.Session.openAny(driver, plan.targets);
+    const primary_contract = libdice_contract.fromDecision(primary_plan.decision);
+    try libdice_contract.validateBoundary(primary_contract);
 
-    return .{
-        .result = .{
-            .decision = plan.decision,
-            .contract = contract,
-            .outcome = switch (plan.decision) {
+    var result = Result{
+        .decision = primary_plan.decision,
+        .contract = primary_contract,
+        .outcome = switch (primary_plan.decision) {
+            .direct => .direct,
+            .signaling_then_direct => .direct_after_signaling,
+            .relay => .relay,
+            .none => return MeshError.NotFound,
+        },
+    };
+    var used_relay_fallback = false;
+    const session = libfast_adapter.Session.openAny(driver, primary_plan.targets) catch |primary_err| blk: {
+        if (primary_plan.decision != .direct and primary_plan.decision != .signaling_then_direct) return primary_err;
+        var relay_runtime = runtime;
+        relay_runtime.direct_disabled = true;
+        const relay_plan = orchestrator.buildPlan(allocator, .{}, peer, relay_runtime) catch return primary_err;
+        defer relay_plan.deinit(allocator);
+
+        const relay_contract = libdice_contract.fromDecision(relay_plan.decision);
+        try libdice_contract.validateBoundary(relay_contract);
+        const relay_session = libfast_adapter.Session.openAny(driver, relay_plan.targets) catch return primary_err;
+        result = .{
+            .decision = relay_plan.decision,
+            .contract = relay_contract,
+            .outcome = switch (relay_plan.decision) {
                 .direct => .direct,
                 .signaling_then_direct => .direct_after_signaling,
                 .relay => .relay,
-                .none => return MeshError.NotFound,
+                .none => return primary_err,
             },
-        },
+        };
+        used_relay_fallback = true;
+        break :blk relay_session;
+    };
+
+    return .{
+        .result = result,
         .session = session,
+        .used_relay_fallback = used_relay_fallback,
     };
 }
 
@@ -349,6 +376,50 @@ test "node orchestrator opens direct session via libfast adapter driver" {
     try std.testing.expectEqual(Outcome.direct, opened.result.outcome);
     try std.testing.expectEqual(routing_policy.Decision.direct, opened.result.decision);
     try std.testing.expectEqual(@as(libfast_adapter.ConnectionId, 9001), opened.session.connection_id);
+    try std.testing.expect(!opened.used_relay_fallback);
     try std.testing.expect(fake.saw_direct);
     try std.testing.expectEqual(@as(usize, 1), fake.attempts);
+}
+
+test "node orchestrator connectAndOpenSession falls back to relay when direct opening fails" {
+    const Fake = struct {
+        const Self = @This();
+        attempts: usize = 0,
+        saw_relay: bool = false,
+        fn connect(ctx_ptr: *anyopaque, target: @import("libfast.zig").ConnectionTarget) MeshError!libfast_adapter.ConnectionId {
+            const ctx: *Self = @ptrCast(@alignCast(ctx_ptr));
+            ctx.attempts += 1;
+            return switch (target) {
+                .direct => MeshError.NotFound,
+                .relay => blk: {
+                    ctx.saw_relay = true;
+                    break :blk 9100;
+                },
+            };
+        }
+        fn send(_: *anyopaque, _: libfast_adapter.ConnectionId, _: []const u8) MeshError!void {}
+        fn recv(_: *anyopaque, _: std.mem.Allocator, _: libfast_adapter.ConnectionId) MeshError!?[]u8 {
+            return null;
+        }
+        fn close(_: *anyopaque, _: libfast_adapter.ConnectionId) MeshError!void {}
+    };
+
+    var fake = Fake{};
+    const driver = libfast_adapter.Driver{
+        .ctx = &fake,
+        .vtable = &.{
+            .connect = Fake.connect,
+            .send = Fake.send,
+            .recv = Fake.recv,
+            .close = Fake.close,
+        },
+    };
+
+    const opened = try connectAndOpenSession(std.testing.allocator, fixtureResolvedPeer(), .{}, driver);
+    try std.testing.expectEqual(Outcome.relay, opened.result.outcome);
+    try std.testing.expectEqual(routing_policy.Decision.relay, opened.result.decision);
+    try std.testing.expectEqual(@as(libfast_adapter.ConnectionId, 9100), opened.session.connection_id);
+    try std.testing.expect(opened.used_relay_fallback);
+    try std.testing.expect(fake.saw_relay);
+    try std.testing.expectEqual(@as(usize, 2), fake.attempts);
 }
