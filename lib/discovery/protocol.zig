@@ -37,6 +37,8 @@ pub const Message = struct {
 
 pub fn encode(allocator: std.mem.Allocator, msg: Message) MeshError![]u8 {
     if (msg.correlation_id == 0) return MeshError.InvalidPeerRecord;
+    if (std.mem.indexOfScalar(u8, msg.node_hex, '|') != null) return MeshError.InvalidPeerRecord;
+    if (std.mem.indexOfScalar(u8, msg.payload, '|') != null) return MeshError.InvalidPeerRecord;
     return std.fmt.allocPrint(allocator, "{s}|{d}|{s}|{s}", .{
         msg.kind.asText(),
         msg.correlation_id,
@@ -84,4 +86,19 @@ test "discovery protocol encodes and decodes publish message" {
 test "discovery protocol rejects malformed data" {
     try std.testing.expectError(MeshError.InvalidPeerRecord, decode("bad"));
     try std.testing.expectError(MeshError.InvalidPeerRecord, decode("lookup|0|abcd|x"));
+}
+
+test "discovery protocol encode rejects delimiter in node or payload fields" {
+    try std.testing.expectError(MeshError.InvalidPeerRecord, encode(std.testing.allocator, .{
+        .kind = .lookup,
+        .correlation_id = 1,
+        .node_hex = "abc|def",
+        .payload = "x",
+    }));
+    try std.testing.expectError(MeshError.InvalidPeerRecord, encode(std.testing.allocator, .{
+        .kind = .lookup,
+        .correlation_id = 1,
+        .node_hex = "abcdef",
+        .payload = "x|y",
+    }));
 }
