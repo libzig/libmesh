@@ -99,6 +99,10 @@ pub const PeerRecord = struct {
     pub fn verify(self: PeerRecord, allocator: std.mem.Allocator, public_key: libself.identity.PublicKey) !bool {
         const expected_node_id = libself.NodeId.fromPublicKey(public_key);
         if (!std.mem.eql(u8, &self.node_id.toBytes(), &expected_node_id.toBytes())) return false;
+        if (self.did) |did| {
+            const did_key = libself.DidKey.parse(allocator, did) catch return false;
+            if (!std.mem.eql(u8, &did_key.public_key, &public_key)) return false;
+        }
 
         const sig = self.signature orelse return false;
         const payload = try self.canonicalPayloadAlloc(allocator);
@@ -343,6 +347,8 @@ test "PeerRecord canonical payload normalizes relay hint ordering" {
 test "PeerRecord sign and verify uses libself identity keys" {
     const key_pair = try libself.identity.KeyPair.fromSeed([_]u8{0x22} ** 32);
     const node_id = libself.NodeId.fromPublicKey(key_pair.public_key);
+    const did = try libself.DidKey.fromKeyPair(key_pair).encode(std.testing.allocator);
+    defer std.testing.allocator.free(did);
 
     const endpoints = [_]PublishedEndpoint{
         .{ .host = "mesh.example", .port = 4433, .priority = 10 },
@@ -353,7 +359,7 @@ test "PeerRecord sign and verify uses libself identity keys" {
 
     var record = PeerRecord{
         .node_id = node_id,
-        .did = "did:key:zexample",
+        .did = did,
         .published_at_ms = 1,
         .expires_at_ms = 999,
         .endpoints = &endpoints,
@@ -388,8 +394,35 @@ test "PeerRecord verify fails when signer key does not match node id" {
     try std.testing.expect(!(try record.verify(allocator, signer.public_key)));
 }
 
+test "PeerRecord verify fails when did does not match signer public key" {
+    const signer = try libself.identity.KeyPair.fromSeed([_]u8{0x26} ** 32);
+    const other = try libself.identity.KeyPair.fromSeed([_]u8{0x27} ** 32);
+    const wrong_did = try libself.DidKey.fromKeyPair(other).encode(std.testing.allocator);
+    defer std.testing.allocator.free(wrong_did);
+
+    const endpoints = [_]PublishedEndpoint{
+        .{ .host = "203.0.113.201", .port = 4433, .priority = 1 },
+    };
+    const relay_hints = [_]RelayHint{
+        .{ .relay_id = "relay-did", .relay_address = "relay.example.net:7443", .priority = 1 },
+    };
+
+    var record = PeerRecord{
+        .node_id = libself.NodeId.fromPublicKey(signer.public_key),
+        .did = wrong_did,
+        .published_at_ms = 5,
+        .expires_at_ms = 50,
+        .endpoints = &endpoints,
+        .relay_hints = &relay_hints,
+    };
+    try record.sign(std.testing.allocator, signer);
+    try std.testing.expect(!(try record.verify(std.testing.allocator, signer.public_key)));
+}
+
 test "PeerRecord wire payload roundtrip preserves signed record" {
     const key_pair = try libself.identity.KeyPair.fromSeed([_]u8{0x25} ** 32);
+    const did = try libself.DidKey.fromKeyPair(key_pair).encode(std.testing.allocator);
+    defer std.testing.allocator.free(did);
     const endpoints = [_]PublishedEndpoint{
         .{ .host = "203.0.113.200", .port = 4433, .priority = 3 },
     };
@@ -398,7 +431,7 @@ test "PeerRecord wire payload roundtrip preserves signed record" {
     };
     var record = PeerRecord{
         .node_id = libself.NodeId.fromPublicKey(key_pair.public_key),
-        .did = "did:key:zwire",
+        .did = did,
         .published_at_ms = 50,
         .expires_at_ms = 500,
         .endpoints = &endpoints,
@@ -411,7 +444,7 @@ test "PeerRecord wire payload roundtrip preserves signed record" {
 
     var parsed = try parseWirePayload(std.testing.allocator, wire);
     defer parsed.deinit();
-    try std.testing.expectEqualStrings("did:key:zwire", parsed.record.did.?);
+    try std.testing.expectEqualStrings(did, parsed.record.did.?);
     try std.testing.expect(parsed.record.signature != null);
     try std.testing.expect(try parsed.record.verify(std.testing.allocator, key_pair.public_key));
 }

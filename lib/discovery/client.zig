@@ -66,6 +66,8 @@ test "discovery client builds lookup message with node hex id" {
 
 test "discovery client builds publish and refresh messages with wire record payloads" {
     const kp = try libself.identity.KeyPair.fromSeed([_]u8{0xd4} ** 32);
+    const did = try libself.DidKey.fromKeyPair(kp).encode(std.testing.allocator);
+    defer std.testing.allocator.free(did);
     const endpoints = [_]@import("../peer/endpoint.zig").PublishedEndpoint{
         .{ .host = "203.0.113.50", .port = 4433 },
     };
@@ -74,7 +76,7 @@ test "discovery client builds publish and refresh messages with wire record payl
     };
     var record = PeerRecord{
         .node_id = libself.NodeId.fromPublicKey(kp.public_key),
-        .did = "did:key:zclient",
+        .did = did,
         .published_at_ms = 1,
         .expires_at_ms = 99,
         .endpoints = &endpoints,
@@ -96,6 +98,8 @@ test "discovery client builds publish and refresh messages with wire record payl
 
 test "discovery client parses lookup response peer records" {
     const kp = try libself.identity.KeyPair.fromSeed([_]u8{0xd5} ** 32);
+    const did = try libself.DidKey.fromKeyPair(kp).encode(std.testing.allocator);
+    defer std.testing.allocator.free(did);
     const endpoints = [_]@import("../peer/endpoint.zig").PublishedEndpoint{
         .{ .host = "203.0.113.51", .port = 4433 },
     };
@@ -104,7 +108,7 @@ test "discovery client parses lookup response peer records" {
     };
     var record = PeerRecord{
         .node_id = libself.NodeId.fromPublicKey(kp.public_key),
-        .did = "did:key:zclient2",
+        .did = did,
         .published_at_ms = 10,
         .expires_at_ms = 100,
         .endpoints = &endpoints,
