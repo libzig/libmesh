@@ -1,12 +1,14 @@
 .{
     .name = .libmesh,
-    .version = "0.0.1",
+    .version = "0.0.2",
     .dependencies = .{
         .libself = .{
-            .path = "../libself",
+            .url = "git+https://github.com/libzig/libself#0.0.2",
+            .hash = "libself-0.0.2-OSVzaCyRAQDDm-KO9x_qZxEtE49ZiG-zMBdaxQOhCEJa",
         },
         .libfast = .{
-            .path = "../libfast",
+            .url = "git+https://github.com/libzig/libfast#0.0.16",
+            .hash = "libfast-0.0.16-BoxUpZaTDAClNv5M5VImaQ06w2vVSI5HSbOADKDNqIXq",
         },
     },
     .paths = .{
