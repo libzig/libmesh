@@ -17,6 +17,11 @@ pub const PeerRecord = struct {
     pub fn validate(self: PeerRecord, now_ms: mesh_time.TimestampMs) MeshError!void {
         if (self.expires_at_ms <= self.published_at_ms) return MeshError.InvalidPeerRecord;
         if (mesh_time.expired(now_ms, self.expires_at_ms)) return MeshError.Expired;
+        if (self.did) |did| {
+            const did_key = libself.DidKey.parse(std.heap.page_allocator, did) catch return MeshError.InvalidPeerRecord;
+            const did_node_id = libself.NodeId.fromPublicKey(did_key.public_key);
+            if (!std.mem.eql(u8, &self.node_id.toBytes(), &did_node_id.toBytes())) return MeshError.InvalidPeerRecord;
+        }
         for (self.endpoints) |endpoint| try endpoint.validate();
         for (self.relay_hints) |hint| try hint.validate();
     }
@@ -447,4 +452,46 @@ test "PeerRecord wire payload roundtrip preserves signed record" {
     try std.testing.expectEqualStrings(did, parsed.record.did.?);
     try std.testing.expect(parsed.record.signature != null);
     try std.testing.expect(try parsed.record.verify(std.testing.allocator, key_pair.public_key));
+}
+
+test "PeerRecord validate rejects malformed did:key values" {
+    const key_pair = try libself.identity.KeyPair.fromSeed([_]u8{0x28} ** 32);
+    const endpoints = [_]PublishedEndpoint{
+        .{ .host = "198.51.100.120", .port = 4433, .priority = 1 },
+    };
+    const relay_hints = [_]RelayHint{
+        .{ .relay_id = "relay-did-invalid", .relay_address = "relay.example.net:7443", .priority = 1 },
+    };
+    const record = PeerRecord{
+        .node_id = libself.NodeId.fromPublicKey(key_pair.public_key),
+        .did = "did:key:not-base58",
+        .published_at_ms = 10,
+        .expires_at_ms = 20,
+        .endpoints = &endpoints,
+        .relay_hints = &relay_hints,
+    };
+    try std.testing.expectError(MeshError.InvalidPeerRecord, record.validate(11));
+}
+
+test "PeerRecord validate rejects did:key values that map to a different node id" {
+    const signer = try libself.identity.KeyPair.fromSeed([_]u8{0x29} ** 32);
+    const other = try libself.identity.KeyPair.fromSeed([_]u8{0x2c} ** 32);
+    const other_did = try libself.DidKey.fromKeyPair(other).encode(std.testing.allocator);
+    defer std.testing.allocator.free(other_did);
+
+    const endpoints = [_]PublishedEndpoint{
+        .{ .host = "198.51.100.121", .port = 4433, .priority = 1 },
+    };
+    const relay_hints = [_]RelayHint{
+        .{ .relay_id = "relay-did-mismatch", .relay_address = "relay.example.net:8443", .priority = 1 },
+    };
+    const record = PeerRecord{
+        .node_id = libself.NodeId.fromPublicKey(signer.public_key),
+        .did = other_did,
+        .published_at_ms = 10,
+        .expires_at_ms = 20,
+        .endpoints = &endpoints,
+        .relay_hints = &relay_hints,
+    };
+    try std.testing.expectError(MeshError.InvalidPeerRecord, record.validate(11));
 }
