@@ -101,9 +101,10 @@ pub const SessionTransport = struct {
             .allow_open = allow_open,
         };
         var validate_ctx: u8 = 0;
-        const response = try request_exchange.requestResponseValidated(
+        const response = try request_exchange.requestResponseValidatedFrom(
             allocator,
             self.client,
+            self.server_id,
             self.server_id,
             .{
                 .kind = .request,
@@ -262,4 +263,28 @@ test "relay session transport roundTrip retries on invalid first response payloa
         .payload = "node-b",
     }, .{ .max_attempts = 3 }, true);
     try std.testing.expectEqual(protocol.MessageKind.accept, recovered.kind);
+}
+
+test "relay session transport roundTrip ignores spoofed responder packets" {
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    const transport = SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-relay",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-relay", .bus = &bus },
+    };
+    const spoof = @import("../integration/session_endpoint.zig").Endpoint{
+        .id = "mesh-spoof",
+        .bus = &bus,
+    };
+
+    try spoof.sendResponse(std.testing.allocator, "node-a", 913, .{ .relay_stream = true }, "spoof");
+    const opened = try transport.roundTrip(std.testing.allocator, .{
+        .kind = .open,
+        .session_id = 913,
+        .payload = "node-b",
+    }, .{ .max_attempts = 2 }, true);
+    try std.testing.expectEqual(protocol.MessageKind.accept, opened.kind);
+    try std.testing.expectEqual(@as(usize, 1), bus.pendingCount());
 }
