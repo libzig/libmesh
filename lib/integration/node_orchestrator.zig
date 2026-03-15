@@ -206,6 +206,16 @@ test "node orchestrator returns relay outcome when direct route is disabled" {
     try std.testing.expect(result.contract.use_relay_fallback);
 }
 
+test "node orchestrator returns relay outcome when traversal is needed but libdice is unavailable" {
+    const result = try connect(std.testing.allocator, fixtureResolvedPeer(), .{
+        .needs_traversal = true,
+        .dice_available = false,
+    });
+    try std.testing.expectEqual(Outcome.relay, result.outcome);
+    try std.testing.expect(result.contract.use_relay_fallback);
+    try std.testing.expect(!result.contract.invoke_external_libdice);
+}
+
 test "node orchestrator session-control path returns direct outcome" {
     var bus = @import("session_bus.zig").SessionBus.init(std.testing.allocator);
     defer bus.deinit();
