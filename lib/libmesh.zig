@@ -33,6 +33,7 @@ pub const auth = struct {
 };
 
 pub const discovery = struct {
+    pub const protocol = @import("discovery/protocol.zig");
     pub const store = @import("discovery/store.zig");
 };
 
@@ -76,6 +77,7 @@ test "libmesh foundation imports libself and libfast" {
     _ = auth.record_signer;
     _ = auth.record_verifier;
     _ = auth.trust_bridge;
+    _ = discovery.protocol;
     _ = discovery.store;
     _ = signaling.protocol;
     _ = signaling.rendezvous;
