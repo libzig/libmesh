@@ -59,3 +59,34 @@ test "scenario case B uses signaling and plans signaling_then_direct route" {
     defer plan.deinit(std.testing.allocator);
     try std.testing.expectEqual(@import("../routing/policy.zig").Decision.signaling_then_direct, plan.decision);
 }
+
+test "scenario case B downgrades to relay plan when libdice is unavailable" {
+    var store = @import("../discovery/store.zig").InMemoryStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const key_pair = try libself.identity.KeyPair.fromSeed([_]u8{0xa4} ** 32);
+    const endpoints = [_]@import("../peer/endpoint.zig").PublishedEndpoint{
+        .{ .host = "198.51.100.202", .port = 4433, .priority = 10 },
+    };
+    const hints = [_]@import("../peer/relay_hint.zig").RelayHint{
+        .{ .relay_id = "relay-case-b-no-dice", .relay_address = "relay.example.net:8443", .priority = 5 },
+    };
+    var record = @import("../peer/peer_record.zig").PeerRecord{
+        .node_id = libself.NodeId.fromPublicKey(key_pair.public_key),
+        .published_at_ms = 100,
+        .expires_at_ms = 1000,
+        .endpoints = &endpoints,
+        .relay_hints = &hints,
+    };
+    try record.sign(std.testing.allocator, key_pair);
+    try mesh_api.publishSelf(&store, key_pair.public_key, record, 110);
+
+    const loaded = try mesh_api.lookupPeer(&store, key_pair.public_key, record.node_id);
+    const resolved = resolvedFromRecord(loaded);
+    const plan = try mesh_api.resolveRoutes(std.testing.allocator, resolved, .{
+        .needs_traversal = true,
+        .dice_available = false,
+    });
+    defer plan.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@import("../routing/policy.zig").Decision.relay, plan.decision);
+}
