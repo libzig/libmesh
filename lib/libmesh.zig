@@ -80,6 +80,10 @@ pub const relay = struct {
     pub const session = @import("relay/session.zig");
 };
 
+pub const scenario = struct {
+    pub const direct_case = @import("scenario/direct_case.zig");
+};
+
 test "libmesh foundation imports libself and libfast" {
     const std = @import("std");
     try std.testing.expectEqualStrings("hello from libmesh", hello());
@@ -138,4 +142,5 @@ test "libmesh foundation imports libself and libfast" {
     _ = relay.service;
     _ = relay.server;
     _ = relay.session;
+    _ = scenario.direct_case;
 }
