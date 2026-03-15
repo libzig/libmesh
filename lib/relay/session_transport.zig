@@ -1,6 +1,7 @@
 const std = @import("std");
 const MeshError = @import("../common/error.zig").MeshError;
 const guard = @import("../integration/negotiation_guard.zig");
+const control = @import("../integration/control_session.zig");
 const Endpoint = @import("../integration/session_endpoint.zig").Endpoint;
 const request_exchange = @import("../integration/request_exchange.zig");
 const retry = @import("../integration/retry.zig");
@@ -99,7 +100,8 @@ pub const SessionTransport = struct {
             .transport = &self,
             .allow_open = allow_open,
         };
-        const response = try request_exchange.requestResponse(
+        var validate_ctx: u8 = 0;
+        const response = try request_exchange.requestResponseValidated(
             allocator,
             self.client,
             self.server_id,
@@ -113,9 +115,16 @@ pub const SessionTransport = struct {
             policy,
             &pump_ctx,
             pumpAdapter,
+            &validate_ctx,
+            validateRoundTripResponse,
         );
         defer response.deinit(allocator);
         return protocol.decode(response.envelope.payload);
+    }
+
+    fn validateRoundTripResponse(_: *anyopaque, response: control.Envelope) MeshError!void {
+        const parsed = protocol.decode(response.payload) catch return MeshError.NotFound;
+        if (parsed.kind != .accept and parsed.kind != .deny) return MeshError.NotFound;
     }
 };
 
@@ -234,4 +243,23 @@ test "relay session transport roundTrip helper returns accept and deny outcomes"
         .payload = "node-b",
     }, .{ .max_attempts = 2 }, false);
     try std.testing.expectEqual(protocol.MessageKind.deny, deny.kind);
+}
+
+test "relay session transport roundTrip retries on invalid first response payload" {
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    const transport = SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-relay",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-relay", .bus = &bus },
+    };
+
+    try transport.server.sendResponse(std.testing.allocator, "node-a", 912, .{ .relay_stream = true }, "bad");
+    const recovered = try transport.roundTrip(std.testing.allocator, .{
+        .kind = .open,
+        .session_id = 912,
+        .payload = "node-b",
+    }, .{ .max_attempts = 3 }, true);
+    try std.testing.expectEqual(protocol.MessageKind.accept, recovered.kind);
 }
