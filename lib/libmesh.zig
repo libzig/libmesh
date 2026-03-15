@@ -5,6 +5,8 @@ pub fn hello() []const u8 {
     return "hello from libmesh";
 }
 
+pub const api = @import("mesh.zig");
+
 pub const Foundation = struct {
     pub const NodeId = libself.NodeId;
     pub const KeyPair = libself.identity.KeyPair;
@@ -93,6 +95,7 @@ test "libmesh foundation imports libself and libfast" {
     _ = common.time;
     _ = common.version;
     _ = common.caps;
+    _ = api;
     _ = peer.endpoint;
     _ = peer.peer_record;
     _ = peer.relay_hint;
