@@ -6,6 +6,7 @@ const RouteCandidate = @import("../peer/route_candidate.zig").RouteCandidate;
 const routing_policy = @import("../routing/policy.zig");
 const orchestrator = @import("../routing/orchestrator.zig");
 const libdice_contract = @import("libdice_contract.zig");
+const libfast_adapter = @import("libfast_adapter.zig");
 
 pub const Outcome = enum {
     direct,
@@ -17,6 +18,11 @@ pub const Result = struct {
     outcome: Outcome,
     decision: routing_policy.Decision,
     contract: libdice_contract.Contract,
+};
+
+pub const OpenSessionResult = struct {
+    result: Result,
+    session: libfast_adapter.Session,
 };
 
 pub fn connect(
@@ -39,6 +45,34 @@ pub fn connect(
             .relay => .relay,
             .none => return MeshError.NotFound,
         },
+    };
+}
+
+pub fn connectAndOpenSession(
+    allocator: std.mem.Allocator,
+    peer: ResolvedPeer,
+    runtime: routing_policy.Runtime,
+    driver: libfast_adapter.Driver,
+) MeshError!OpenSessionResult {
+    const plan = try orchestrator.buildPlan(allocator, .{}, peer, runtime);
+    defer plan.deinit(allocator);
+
+    const contract = libdice_contract.fromDecision(plan.decision);
+    try libdice_contract.validateBoundary(contract);
+    const session = try libfast_adapter.Session.openAny(driver, plan.targets);
+
+    return .{
+        .result = .{
+            .decision = plan.decision,
+            .contract = contract,
+            .outcome = switch (plan.decision) {
+                .direct => .direct,
+                .signaling_then_direct => .direct_after_signaling,
+                .relay => .relay,
+                .none => return MeshError.NotFound,
+            },
+        },
+        .session = session,
     };
 }
 
@@ -277,4 +311,44 @@ test "node orchestrator session-control path returns signaling/direct and relay 
         relay,
     );
     try std.testing.expectEqual(Outcome.relay, relayed.outcome);
+}
+
+test "node orchestrator opens direct session via libfast adapter driver" {
+    const Fake = struct {
+        const Self = @This();
+        attempts: usize = 0,
+        saw_direct: bool = false,
+        fn connect(ctx_ptr: *anyopaque, target: @import("libfast.zig").ConnectionTarget) MeshError!libfast_adapter.ConnectionId {
+            const ctx: *Self = @ptrCast(@alignCast(ctx_ptr));
+            ctx.attempts += 1;
+            switch (target) {
+                .direct => ctx.saw_direct = true,
+                .relay => return MeshError.NotFound,
+            }
+            return 9001;
+        }
+        fn send(_: *anyopaque, _: libfast_adapter.ConnectionId, _: []const u8) MeshError!void {}
+        fn recv(_: *anyopaque, _: std.mem.Allocator, _: libfast_adapter.ConnectionId) MeshError!?[]u8 {
+            return null;
+        }
+        fn close(_: *anyopaque, _: libfast_adapter.ConnectionId) MeshError!void {}
+    };
+
+    var fake = Fake{};
+    const driver = libfast_adapter.Driver{
+        .ctx = &fake,
+        .vtable = &.{
+            .connect = Fake.connect,
+            .send = Fake.send,
+            .recv = Fake.recv,
+            .close = Fake.close,
+        },
+    };
+
+    const opened = try connectAndOpenSession(std.testing.allocator, fixtureResolvedPeer(), .{}, driver);
+    try std.testing.expectEqual(Outcome.direct, opened.result.outcome);
+    try std.testing.expectEqual(routing_policy.Decision.direct, opened.result.decision);
+    try std.testing.expectEqual(@as(libfast_adapter.ConnectionId, 9001), opened.session.connection_id);
+    try std.testing.expect(fake.saw_direct);
+    try std.testing.expectEqual(@as(usize, 1), fake.attempts);
 }
