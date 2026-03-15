@@ -11,6 +11,13 @@ pub const Foundation = struct {
     pub const DidKey = libself.DidKey;
 };
 
+pub const common = struct {
+    pub const errors = @import("common/error.zig");
+    pub const time = @import("common/time.zig");
+    pub const version = @import("common/version.zig");
+    pub const caps = @import("common/caps.zig");
+};
+
 test "libmesh foundation imports libself and libfast" {
     const std = @import("std");
     try std.testing.expectEqualStrings("hello from libmesh", hello());
@@ -24,4 +31,9 @@ test "libmesh foundation imports libself and libfast" {
     const did = try Foundation.DidKey.fromKeyPair(key_pair).encode(allocator);
     defer allocator.free(did);
     try std.testing.expect(std.mem.startsWith(u8, did, "did:key:"));
+
+    _ = common.errors;
+    _ = common.time;
+    _ = common.version;
+    _ = common.caps;
 }
