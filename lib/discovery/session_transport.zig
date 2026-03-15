@@ -91,7 +91,7 @@ pub const SessionTransport = struct {
     pub fn recvLookup(self: SessionTransport, allocator: std.mem.Allocator, correlation_id: u64) MeshError!discovery_client.ParsedPeerRecord {
         const response = try self.client.expectResponse(allocator, correlation_id);
         defer response.deinit(allocator);
-        return discovery_client.parseLookupResponse(allocator, response.envelope.payload);
+        return discovery_client.parseLookupResponseForCorrelation(allocator, correlation_id, response.envelope.payload);
     }
 
     pub fn recvAck(self: SessionTransport, allocator: std.mem.Allocator, correlation_id: u64) MeshError!void {
