@@ -20,21 +20,26 @@ pub const InMemoryStore = struct {
     }
 
     pub fn deinit(self: *InMemoryStore) void {
+        for (self.entries.items) |entry| {
+            self.freeRecord(entry.record);
+        }
         self.entries.deinit(self.allocator);
     }
 
     pub fn publish(self: *InMemoryStore, record: PeerRecord, signer_public_key: libself.identity.PublicKey, now_ms: u64) MeshError!void {
         try record.validate(now_ms);
         if (!(record.verify(self.allocator, signer_public_key) catch false)) return MeshError.InvalidSignature;
+        const owned = try self.cloneRecord(record);
 
         if (self.findIndex(record.node_id)) |idx| {
-            self.entries.items[idx].record = record;
+            self.freeRecord(self.entries.items[idx].record);
+            self.entries.items[idx].record = owned;
             return;
         }
 
         self.entries.append(self.allocator, .{
             .node_id = record.node_id,
-            .record = record,
+            .record = owned,
         }) catch return MeshError.BufferTooSmall;
     }
 
@@ -47,12 +52,15 @@ pub const InMemoryStore = struct {
         const idx = self.findIndex(record.node_id) orelse return MeshError.NotFound;
         try record.validate(now_ms);
         if (!(record.verify(self.allocator, signer_public_key) catch false)) return MeshError.InvalidSignature;
-        self.entries.items[idx].record = record;
+        const owned = try self.cloneRecord(record);
+        self.freeRecord(self.entries.items[idx].record);
+        self.entries.items[idx].record = owned;
     }
 
     pub fn withdraw(self: *InMemoryStore, node_id: libself.NodeId) MeshError!void {
         const idx = self.findIndex(node_id) orelse return MeshError.NotFound;
-        _ = self.entries.swapRemove(idx);
+        const removed = self.entries.swapRemove(idx);
+        self.freeRecord(removed.record);
     }
 
     fn findIndex(self: *const InMemoryStore, node_id: libself.NodeId) ?usize {
@@ -60,6 +68,74 @@ pub const InMemoryStore = struct {
             if (std.mem.eql(u8, &entry.node_id.toBytes(), &node_id.toBytes())) return idx;
         }
         return null;
+    }
+
+    fn cloneRecord(self: *InMemoryStore, source: PeerRecord) MeshError!PeerRecord {
+        const did_owned = if (source.did) |did| self.allocator.dupe(u8, did) catch return MeshError.BufferTooSmall else null;
+        errdefer if (did_owned) |did| self.allocator.free(did);
+
+        var endpoints_owned = self.allocator.alloc(@import("../peer/endpoint.zig").PublishedEndpoint, source.endpoints.len) catch return MeshError.BufferTooSmall;
+        var endpoint_count: usize = 0;
+        errdefer {
+            var i: usize = 0;
+            while (i < endpoint_count) : (i += 1) {
+                self.allocator.free(endpoints_owned[i].host);
+                if (endpoints_owned[i].alpn) |alpn| self.allocator.free(alpn);
+            }
+            self.allocator.free(endpoints_owned);
+        }
+        for (source.endpoints, 0..) |endpoint, idx| {
+            endpoints_owned[idx] = endpoint;
+            endpoints_owned[idx].host = self.allocator.dupe(u8, endpoint.host) catch return MeshError.BufferTooSmall;
+            endpoints_owned[idx].alpn = if (endpoint.alpn) |alpn| self.allocator.dupe(u8, alpn) catch return MeshError.BufferTooSmall else null;
+            endpoint_count += 1;
+        }
+
+        var hints_owned = self.allocator.alloc(@import("../peer/relay_hint.zig").RelayHint, source.relay_hints.len) catch return MeshError.BufferTooSmall;
+        var hint_count: usize = 0;
+        errdefer {
+            var i: usize = 0;
+            while (i < hint_count) : (i += 1) {
+                self.allocator.free(hints_owned[i].relay_id);
+                self.allocator.free(hints_owned[i].relay_address);
+                self.allocator.free(hints_owned[i].relay_alpn);
+            }
+            self.allocator.free(hints_owned);
+        }
+        for (source.relay_hints, 0..) |hint, idx| {
+            hints_owned[idx] = hint;
+            hints_owned[idx].relay_id = self.allocator.dupe(u8, hint.relay_id) catch return MeshError.BufferTooSmall;
+            hints_owned[idx].relay_address = self.allocator.dupe(u8, hint.relay_address) catch return MeshError.BufferTooSmall;
+            hints_owned[idx].relay_alpn = self.allocator.dupe(u8, hint.relay_alpn) catch return MeshError.BufferTooSmall;
+            hint_count += 1;
+        }
+
+        return .{
+            .node_id = source.node_id,
+            .did = did_owned,
+            .published_at_ms = source.published_at_ms,
+            .expires_at_ms = source.expires_at_ms,
+            .endpoints = endpoints_owned,
+            .relay_hints = hints_owned,
+            .signature = source.signature,
+        };
+    }
+
+    fn freeRecord(self: *InMemoryStore, record: PeerRecord) void {
+        if (record.did) |did| self.allocator.free(did);
+
+        for (record.endpoints) |endpoint| {
+            self.allocator.free(endpoint.host);
+            if (endpoint.alpn) |alpn| self.allocator.free(alpn);
+        }
+        self.allocator.free(record.endpoints);
+
+        for (record.relay_hints) |hint| {
+            self.allocator.free(hint.relay_id);
+            self.allocator.free(hint.relay_address);
+            self.allocator.free(hint.relay_alpn);
+        }
+        self.allocator.free(record.relay_hints);
     }
 };
 
