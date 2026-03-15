@@ -58,6 +58,7 @@ pub const signaling = struct {
 
 pub const integration = struct {
     pub const control_session = @import("integration/control_session.zig");
+    pub const libdice_contract = @import("integration/libdice_contract.zig");
     pub const libfast = @import("integration/libfast.zig");
     pub const libself = @import("integration/libself.zig");
     pub const retry = @import("integration/retry.zig");
@@ -135,6 +136,7 @@ test "libmesh foundation imports libself and libfast" {
     _ = integration.libfast;
     _ = integration.libself;
     _ = integration.control_session;
+    _ = integration.libdice_contract;
     _ = integration.retry;
     _ = routing.orchestrator;
     _ = routing.policy;
