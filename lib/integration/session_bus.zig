@@ -51,6 +51,19 @@ pub const SessionBus = struct {
         }
         return null;
     }
+
+    pub fn recvFrom(self: *SessionBus, to: []const u8, from: []const u8) ?Packet {
+        for (self.queue.items, 0..) |packet, idx| {
+            if (std.mem.eql(u8, packet.to, to) and std.mem.eql(u8, packet.from, from)) {
+                return self.queue.swapRemove(idx);
+            }
+        }
+        return null;
+    }
+
+    pub fn pendingCount(self: *const SessionBus) usize {
+        return self.queue.items.len;
+    }
 };
 
 test "SessionBus send and recv transfers packet payload to target" {
@@ -76,6 +89,7 @@ test "SessionBus recv leaves unmatched packets in queue" {
     try bus.send("node-a", "node-c", "second");
     const missing = bus.recv("node-x");
     try std.testing.expect(missing == null);
+    try std.testing.expectEqual(@as(usize, 2), bus.pendingCount());
     const packet = bus.recv("node-c").?;
     defer {
         std.testing.allocator.free(packet.from);
@@ -83,4 +97,21 @@ test "SessionBus recv leaves unmatched packets in queue" {
         std.testing.allocator.free(packet.payload);
     }
     try std.testing.expectEqualStrings("second", packet.payload);
+    try std.testing.expectEqual(@as(usize, 1), bus.pendingCount());
+}
+
+test "SessionBus recvFrom selects packet by source and destination" {
+    var bus = SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+
+    try bus.send("node-a", "node-c", "from-a");
+    try bus.send("node-b", "node-c", "from-b");
+    const packet = bus.recvFrom("node-c", "node-b").?;
+    defer {
+        std.testing.allocator.free(packet.from);
+        std.testing.allocator.free(packet.to);
+        std.testing.allocator.free(packet.payload);
+    }
+    try std.testing.expectEqualStrings("from-b", packet.payload);
+    try std.testing.expectEqual(@as(usize, 1), bus.pendingCount());
 }
