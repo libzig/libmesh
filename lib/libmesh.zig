@@ -83,6 +83,7 @@ pub const relay = struct {
     pub const service = @import("relay/service.zig");
     pub const server = @import("relay/server.zig");
     pub const session = @import("relay/session.zig");
+    pub const session_transport = @import("relay/session_transport.zig");
 };
 
 pub const scenario = struct {
@@ -155,6 +156,7 @@ test "libmesh foundation imports libself and libfast" {
     _ = relay.service;
     _ = relay.server;
     _ = relay.session;
+    _ = relay.session_transport;
     _ = scenario.direct_case;
     _ = scenario.failure_modes;
     _ = scenario.relay_fallback_case;

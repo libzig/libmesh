@@ -1,0 +1,107 @@
+const std = @import("std");
+const MeshError = @import("../common/error.zig").MeshError;
+const Endpoint = @import("../integration/session_endpoint.zig").Endpoint;
+const protocol = @import("protocol.zig");
+
+pub const SessionTransport = struct {
+    client_id: []const u8,
+    server_id: []const u8,
+    client: Endpoint,
+    server: Endpoint,
+
+    pub fn send(self: SessionTransport, allocator: std.mem.Allocator, message: protocol.Message) MeshError!void {
+        const payload = try protocol.encode(allocator, message);
+        defer allocator.free(payload);
+        try self.client.sendEnvelope(allocator, self.server_id, .{
+            .kind = .request,
+            .correlation_id = message.session_id,
+            .version = .{ .major = 1, .minor = 0, .patch = 0 },
+            .capabilities = .{
+                .relay_stream = true,
+                .relay_datagram = true,
+            },
+            .payload = payload,
+        });
+    }
+
+    pub fn pumpServer(self: SessionTransport, allocator: std.mem.Allocator, allow_open: bool) MeshError!bool {
+        const incoming = (try self.server.recvEnvelope(allocator)) orelse return false;
+        defer incoming.deinit(allocator);
+        if (incoming.envelope.kind != .request) return MeshError.InvalidPeerRecord;
+        const request = try protocol.decode(incoming.envelope.payload);
+
+        const response_payload = try protocol.encode(allocator, switch (request.kind) {
+            .open => .{
+                .kind = if (allow_open) .accept else .deny,
+                .session_id = request.session_id,
+                .payload = if (allow_open) "open-ok" else "open-denied",
+            },
+            .close => .{
+                .kind = .accept,
+                .session_id = request.session_id,
+                .payload = "closed",
+            },
+            else => .{
+                .kind = .accept,
+                .session_id = request.session_id,
+                .payload = "forwarded",
+            },
+        });
+        defer allocator.free(response_payload);
+
+        try self.server.sendEnvelope(allocator, self.client_id, .{
+            .kind = .response,
+            .correlation_id = request.session_id,
+            .version = .{ .major = 1, .minor = 0, .patch = 0 },
+            .capabilities = .{ .relay_stream = true },
+            .payload = response_payload,
+        });
+        return true;
+    }
+
+    pub fn recv(self: SessionTransport, allocator: std.mem.Allocator, session_id: u64) MeshError!protocol.Message {
+        const response = try self.client.expectResponse(allocator, session_id);
+        defer response.deinit(allocator);
+        return protocol.decode(response.envelope.payload);
+    }
+};
+
+test "relay session transport open request receives accept response" {
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    const transport = SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-relay",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-relay", .bus = &bus },
+    };
+
+    try transport.send(std.testing.allocator, .{
+        .kind = .open,
+        .session_id = 900,
+        .payload = "node-b",
+    });
+    try std.testing.expect(try transport.pumpServer(std.testing.allocator, true));
+    const response = try transport.recv(std.testing.allocator, 900);
+    try std.testing.expectEqual(protocol.MessageKind.accept, response.kind);
+}
+
+test "relay session transport open can be denied by server policy" {
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    const transport = SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-relay",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-relay", .bus = &bus },
+    };
+
+    try transport.send(std.testing.allocator, .{
+        .kind = .open,
+        .session_id = 901,
+        .payload = "node-b",
+    });
+    try std.testing.expect(try transport.pumpServer(std.testing.allocator, false));
+    const response = try transport.recv(std.testing.allocator, 901);
+    try std.testing.expectEqual(protocol.MessageKind.deny, response.kind);
+}
