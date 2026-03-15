@@ -113,7 +113,8 @@ pub const SessionTransport = struct {
         payload: []const u8,
         policy: retry.Policy,
     ) MeshError![]u8 {
-        const response = try request_exchange.requestResponse(
+        var validate_ctx = RoundTripValidate{ .expect_kind = .response };
+        const response = try request_exchange.requestResponseValidated(
             allocator,
             self.client,
             self.server_id,
@@ -127,6 +128,8 @@ pub const SessionTransport = struct {
             policy,
             @constCast(&self),
             pumpAdapter,
+            &validate_ctx,
+            validateRoundTripResponse,
         );
         defer response.deinit(allocator);
         return allocator.dupe(u8, response.envelope.payload) catch MeshError.BufferTooSmall;
@@ -189,6 +192,16 @@ pub const SessionTransport = struct {
         const response = try self.roundTripRaw(allocator, correlation_id, request, policy);
         defer allocator.free(response);
         return discovery_client.parseLookupResponse(allocator, response);
+    }
+
+    const RoundTripValidate = struct {
+        expect_kind: protocol.MessageKind,
+    };
+
+    fn validateRoundTripResponse(ctx_ptr: *anyopaque, response: control.Envelope) MeshError!void {
+        const ctx: *RoundTripValidate = @ptrCast(@alignCast(ctx_ptr));
+        const decoded = protocol.decode(response.payload) catch return MeshError.NotFound;
+        if (decoded.kind != ctx.expect_kind) return MeshError.NotFound;
     }
 };
 
@@ -383,4 +396,50 @@ test "discovery session transport roundtrip helpers run publish lookup refresh w
     try refreshed.sign(std.testing.allocator, kp);
     try transport.refreshRoundTrip(std.testing.allocator, 42, refreshed, .{ .max_attempts = 2 });
     try transport.withdrawRoundTrip(std.testing.allocator, 43, refreshed.node_id, .{ .max_attempts = 2 });
+}
+
+test "discovery session transport roundtrip retries on invalid first response" {
+    const libself = @import("libself");
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    var store = @import("store.zig").InMemoryStore.init(std.testing.allocator);
+    defer store.deinit();
+    const transport = SessionTransport{
+        .client_id = "node-client",
+        .server_id = "node-server",
+        .client = .{ .id = "node-client", .bus = &bus },
+        .server = .{ .id = "node-server", .bus = &bus },
+        .handler = .{ .store = &store },
+    };
+
+    const kp = try libself.identity.KeyPair.fromSeed([_]u8{0xe5} ** 32);
+    const did = try libself.DidKey.fromKeyPair(kp).encode(std.testing.allocator);
+    defer std.testing.allocator.free(did);
+    const endpoints = [_]@import("../peer/endpoint.zig").PublishedEndpoint{
+        .{ .host = "198.51.100.214", .port = 4433 },
+    };
+    const hints = [_]@import("../peer/relay_hint.zig").RelayHint{
+        .{ .relay_id = "relay-round-invalid", .relay_address = "relay.example.net:9443" },
+    };
+    var record = peer_record.PeerRecord{
+        .node_id = libself.NodeId.fromPublicKey(kp.public_key),
+        .did = did,
+        .published_at_ms = 10,
+        .expires_at_ms = 100,
+        .endpoints = &endpoints,
+        .relay_hints = &hints,
+    };
+    try record.sign(std.testing.allocator, kp);
+    try transport.publishRoundTrip(std.testing.allocator, 50, record, .{ .max_attempts = 2 });
+
+    const request = try discovery_client.buildLookup(std.testing.allocator, 51, record.node_id);
+    defer std.testing.allocator.free(request);
+    try transport.client.sendRequest(std.testing.allocator, "node-server", 51, .{ .discovery = true }, request);
+    const first_in = (try transport.server.recvEnvelope(std.testing.allocator)).?;
+    defer first_in.deinit(std.testing.allocator);
+    try transport.server.sendResponse(std.testing.allocator, "node-client", 51, .{ .discovery = true }, "bad|payload");
+
+    var parsed = try transport.lookupRoundTrip(std.testing.allocator, 51, record.node_id, .{ .max_attempts = 3 });
+    defer parsed.deinit();
+    try std.testing.expect(try parsed.record.verify(std.testing.allocator, kp.public_key));
 }
