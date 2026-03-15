@@ -106,8 +106,9 @@ pub fn resolveTargets(allocator: std.mem.Allocator, peer: ResolvedPeer) MeshErro
             .direct => {
                 if (direct.len == 0) continue;
                 const idx = @min(direct_idx, direct.len - 1);
-                selected.append(allocator, try endpointToTarget(direct[idx])) catch return MeshError.BufferTooSmall;
                 if (direct_idx < direct.len) direct_idx += 1;
+                const target = endpointToTarget(direct[idx]) catch continue;
+                selected.append(allocator, target) catch return MeshError.BufferTooSmall;
             },
             .relay => {
                 if (relay.len == 0) continue;
@@ -283,6 +284,40 @@ test "resolveTargets can still return relay target when direct hints are absent"
     try std.testing.expectEqual(@as(usize, 1), targets.len);
     switch (targets[0]) {
         .relay => {},
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "resolveTargets skips invalid direct endpoint hints when another direct hint is usable" {
+    const key_pair = try @import("libself").identity.KeyPair.fromSeed([_]u8{0x74} ** 32);
+    const endpoints = [_]PublishedEndpoint{
+        .{ .host = "", .port = 4433, .priority = 10 },
+        .{ .host = "198.51.100.75", .port = 4433, .priority = 1 },
+    };
+    const hints = [_]RelayHint{};
+    const record = @import("../peer/peer_record.zig").PeerRecord{
+        .node_id = @import("libself").NodeId.fromPublicKey(key_pair.public_key),
+        .published_at_ms = 1,
+        .expires_at_ms = 100,
+        .endpoints = &endpoints,
+        .relay_hints = &hints,
+    };
+    const direct_routes = [_]@import("../peer/route_candidate.zig").RouteCandidate{
+        .{ .kind = .direct, .priority = 10 },
+        .{ .kind = .direct, .priority = 5 },
+    };
+    const relay_routes = [_]@import("../peer/route_candidate.zig").RouteCandidate{};
+    const resolved = ResolvedPeer{
+        .record = record,
+        .direct_routes = &direct_routes,
+        .relay_routes = &relay_routes,
+    };
+
+    const targets = try resolveTargets(std.testing.allocator, resolved);
+    defer std.testing.allocator.free(targets);
+    try std.testing.expectEqual(@as(usize, 1), targets.len);
+    switch (targets[0]) {
+        .direct => |direct| try std.testing.expectEqualStrings("198.51.100.75", direct.host),
         else => return error.TestUnexpectedResult,
     }
 }
