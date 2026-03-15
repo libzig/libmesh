@@ -2,6 +2,8 @@ const std = @import("std");
 const MeshError = @import("../common/error.zig").MeshError;
 const guard = @import("../integration/negotiation_guard.zig");
 const Endpoint = @import("../integration/session_endpoint.zig").Endpoint;
+const request_exchange = @import("../integration/request_exchange.zig");
+const retry = @import("../integration/retry.zig");
 const protocol = @import("protocol.zig");
 
 pub const SessionTransport = struct {
@@ -70,6 +72,48 @@ pub const SessionTransport = struct {
 
     pub fn recv(self: SessionTransport, allocator: std.mem.Allocator, session_id: u64) MeshError!protocol.Message {
         const response = try self.client.expectResponse(allocator, session_id);
+        defer response.deinit(allocator);
+        return protocol.decode(response.envelope.payload);
+    }
+
+    const PumpContext = struct {
+        transport: *const SessionTransport,
+        allow_open: bool,
+    };
+
+    fn pumpAdapter(ctx_ptr: *anyopaque, allocator: std.mem.Allocator) MeshError!bool {
+        const ctx: *PumpContext = @ptrCast(@alignCast(ctx_ptr));
+        return ctx.transport.pumpServer(allocator, ctx.allow_open);
+    }
+
+    pub fn roundTrip(
+        self: SessionTransport,
+        allocator: std.mem.Allocator,
+        message: protocol.Message,
+        policy: retry.Policy,
+        allow_open: bool,
+    ) MeshError!protocol.Message {
+        const payload = try protocol.encode(allocator, message);
+        defer allocator.free(payload);
+        var pump_ctx = PumpContext{
+            .transport = &self,
+            .allow_open = allow_open,
+        };
+        const response = try request_exchange.requestResponse(
+            allocator,
+            self.client,
+            self.server_id,
+            .{
+                .kind = .request,
+                .correlation_id = message.session_id,
+                .version = .{ .major = 1, .minor = 0, .patch = 0 },
+                .capabilities = .{ .relay_stream = true },
+                .payload = payload,
+            },
+            policy,
+            &pump_ctx,
+            pumpAdapter,
+        );
         defer response.deinit(allocator);
         return protocol.decode(response.envelope.payload);
     }
@@ -165,4 +209,29 @@ test "relay session transport rejects missing relay stream capability" {
         .payload = payload,
     });
     try std.testing.expectError(MeshError.AccessDenied, transport.pumpServer(std.testing.allocator, true));
+}
+
+test "relay session transport roundTrip helper returns accept and deny outcomes" {
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    const transport = SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-relay",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-relay", .bus = &bus },
+    };
+
+    const accept = try transport.roundTrip(std.testing.allocator, .{
+        .kind = .open,
+        .session_id = 910,
+        .payload = "node-b",
+    }, .{ .max_attempts = 2 }, true);
+    try std.testing.expectEqual(protocol.MessageKind.accept, accept.kind);
+
+    const deny = try transport.roundTrip(std.testing.allocator, .{
+        .kind = .open,
+        .session_id = 911,
+        .payload = "node-b",
+    }, .{ .max_attempts = 2 }, false);
+    try std.testing.expectEqual(protocol.MessageKind.deny, deny.kind);
 }
