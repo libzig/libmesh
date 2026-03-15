@@ -3,6 +3,7 @@ const MeshError = @import("../common/error.zig").MeshError;
 const protocol = @import("protocol.zig");
 
 pub fn buildOpen(allocator: std.mem.Allocator, session_id: u64, target_node: []const u8) MeshError![]u8 {
+    if (target_node.len == 0) return MeshError.InvalidPeerRecord;
     return protocol.encode(allocator, .{
         .kind = .open,
         .session_id = session_id,
@@ -78,4 +79,8 @@ test "relay client decodeOpenResultForSession validates expected session id" {
     const accepted = try decodeOpenResultForSession(accept_raw, 42);
     try std.testing.expectEqual(protocol.MessageKind.accept, accepted.kind);
     try std.testing.expectError(MeshError.InvalidPeerRecord, decodeOpenResultForSession(accept_raw, 43));
+}
+
+test "relay client buildOpen rejects empty target node" {
+    try std.testing.expectError(MeshError.InvalidPeerRecord, buildOpen(std.testing.allocator, 5, ""));
 }
