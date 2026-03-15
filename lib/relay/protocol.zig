@@ -39,6 +39,7 @@ pub const Message = struct {
 
 pub fn encode(allocator: std.mem.Allocator, msg: Message) MeshError![]u8 {
     if (msg.session_id == 0) return MeshError.InvalidPeerRecord;
+    if (std.mem.indexOfScalar(u8, msg.payload, '|') != null) return MeshError.InvalidPeerRecord;
     return std.fmt.allocPrint(allocator, "{s}|{d}|{s}", .{
         msg.kind.asText(),
         msg.session_id,
@@ -82,4 +83,12 @@ test "relay protocol encode/decode roundtrip for datagram message" {
 test "relay protocol rejects malformed records" {
     try std.testing.expectError(MeshError.InvalidPeerRecord, decode("bad"));
     try std.testing.expectError(MeshError.InvalidPeerRecord, decode("open|0|x"));
+}
+
+test "relay protocol encode rejects delimiter in payload" {
+    try std.testing.expectError(MeshError.InvalidPeerRecord, encode(std.testing.allocator, .{
+        .kind = .open,
+        .session_id = 11,
+        .payload = "node|target",
+    }));
 }
