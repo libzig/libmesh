@@ -192,7 +192,7 @@ pub const SessionTransport = struct {
         defer allocator.free(request);
         const response = try self.roundTripRaw(allocator, correlation_id, request, policy);
         defer allocator.free(response);
-        return discovery_client.parseLookupResponse(allocator, response);
+        return discovery_client.parseLookupResponseForCorrelation(allocator, correlation_id, response);
     }
 
     const RoundTripValidate = struct {
@@ -203,6 +203,7 @@ pub const SessionTransport = struct {
         const ctx: *RoundTripValidate = @ptrCast(@alignCast(ctx_ptr));
         const decoded = protocol.decode(response.payload) catch return MeshError.NotFound;
         if (decoded.kind != ctx.expect_kind) return MeshError.NotFound;
+        if (decoded.correlation_id != response.correlation_id) return MeshError.NotFound;
     }
 };
 
@@ -488,4 +489,52 @@ test "discovery session transport roundtrip ignores spoofed responder packets" {
     defer parsed.deinit();
     try std.testing.expect(try parsed.record.verify(std.testing.allocator, kp.public_key));
     try std.testing.expectEqual(@as(usize, 1), bus.pendingCount());
+}
+
+test "discovery session transport roundtrip retries when payload correlation mismatches envelope" {
+    const libself = @import("libself");
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    var store = @import("store.zig").InMemoryStore.init(std.testing.allocator);
+    defer store.deinit();
+    const transport = SessionTransport{
+        .client_id = "node-client",
+        .server_id = "node-server",
+        .client = .{ .id = "node-client", .bus = &bus },
+        .server = .{ .id = "node-server", .bus = &bus },
+        .handler = .{ .store = &store },
+    };
+
+    const kp = try libself.identity.KeyPair.fromSeed([_]u8{0xeb} ** 32);
+    const did = try libself.DidKey.fromKeyPair(kp).encode(std.testing.allocator);
+    defer std.testing.allocator.free(did);
+    const endpoints = [_]@import("../peer/endpoint.zig").PublishedEndpoint{
+        .{ .host = "198.51.100.219", .port = 4433 },
+    };
+    const hints = [_]@import("../peer/relay_hint.zig").RelayHint{
+        .{ .relay_id = "relay-round-corr", .relay_address = "relay.example.net:9443" },
+    };
+    var record = peer_record.PeerRecord{
+        .node_id = libself.NodeId.fromPublicKey(kp.public_key),
+        .did = did,
+        .published_at_ms = 10,
+        .expires_at_ms = 100,
+        .endpoints = &endpoints,
+        .relay_hints = &hints,
+    };
+    try record.sign(std.testing.allocator, kp);
+    try transport.publishRoundTrip(std.testing.allocator, 70, record, .{ .max_attempts = 2 });
+
+    const bad_lookup_payload = try protocol.encode(std.testing.allocator, .{
+        .kind = .response,
+        .correlation_id = 999,
+        .node_hex = &record.node_id.toHex(),
+        .payload = "not_found",
+    });
+    defer std.testing.allocator.free(bad_lookup_payload);
+    try transport.server.sendResponse(std.testing.allocator, "node-client", 71, .{ .discovery = true }, bad_lookup_payload);
+
+    var parsed = try transport.lookupRoundTrip(std.testing.allocator, 71, record.node_id, .{ .max_attempts = 3 });
+    defer parsed.deinit();
+    try std.testing.expect(try parsed.record.verify(std.testing.allocator, kp.public_key));
 }
