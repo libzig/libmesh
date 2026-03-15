@@ -53,6 +53,7 @@ pub const signaling = struct {
 
 pub const integration = struct {
     pub const libfast = @import("integration/libfast.zig");
+    pub const libself = @import("integration/libself.zig");
 };
 
 pub const relay = struct {
@@ -108,6 +109,7 @@ test "libmesh foundation imports libself and libfast" {
     _ = relay.bridge_datagrams;
     _ = relay.client;
     _ = integration.libfast;
+    _ = integration.libself;
     _ = relay.bridge_streams;
     _ = relay.matcher;
     _ = relay.policy;
