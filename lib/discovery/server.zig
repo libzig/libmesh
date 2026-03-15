@@ -15,6 +15,7 @@ pub const Server = struct {
 
         return switch (msg.kind) {
             .publish => blk: {
+                if (msg.payload.len == 0) return MeshError.InvalidPeerRecord;
                 var parsed = try peer_record.parseWirePayload(allocator, msg.payload);
                 defer parsed.deinit();
                 if (!std.mem.eql(u8, msg.node_hex, &parsed.record.node_id.toHex())) return MeshError.InvalidPeerRecord;
@@ -29,6 +30,7 @@ pub const Server = struct {
                 });
             },
             .lookup => blk: {
+                if (msg.payload.len != 0) return MeshError.InvalidPeerRecord;
                 const payload = if (self.store.lookup(node_id)) |record| p: {
                     const wire = record.wirePayloadAlloc(allocator) catch return MeshError.BufferTooSmall;
                     break :p wire;
@@ -46,6 +48,7 @@ pub const Server = struct {
                 });
             },
             .refresh => blk: {
+                if (msg.payload.len == 0) return MeshError.InvalidPeerRecord;
                 var parsed = try peer_record.parseWirePayload(allocator, msg.payload);
                 defer parsed.deinit();
                 if (!std.mem.eql(u8, msg.node_hex, &parsed.record.node_id.toHex())) return MeshError.InvalidPeerRecord;
@@ -60,6 +63,7 @@ pub const Server = struct {
                 });
             },
             .withdraw => blk: {
+                if (msg.payload.len != 0) return MeshError.InvalidPeerRecord;
                 _ = self.store.withdraw(node_id) catch |err| if (err != MeshError.NotFound) return err;
                 break :blk protocol.encode(allocator, .{
                     .kind = .response,
@@ -257,4 +261,38 @@ test "discovery server rejects publish payload when node hex does not match sign
     defer std.testing.allocator.free(tampered);
 
     try std.testing.expectError(MeshError.InvalidPeerRecord, server.handle(std.testing.allocator, tampered));
+}
+
+test "discovery server enforces request payload semantics by method kind" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+    const server = Server{ .store = &store };
+    const node_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    const bad_lookup = try protocol.encode(std.testing.allocator, .{
+        .kind = .lookup,
+        .correlation_id = 17,
+        .node_hex = node_hex,
+        .payload = "unexpected",
+    });
+    defer std.testing.allocator.free(bad_lookup);
+    try std.testing.expectError(MeshError.InvalidPeerRecord, server.handle(std.testing.allocator, bad_lookup));
+
+    const bad_withdraw = try protocol.encode(std.testing.allocator, .{
+        .kind = .withdraw,
+        .correlation_id = 18,
+        .node_hex = node_hex,
+        .payload = "unexpected",
+    });
+    defer std.testing.allocator.free(bad_withdraw);
+    try std.testing.expectError(MeshError.InvalidPeerRecord, server.handle(std.testing.allocator, bad_withdraw));
+
+    const bad_publish = try protocol.encode(std.testing.allocator, .{
+        .kind = .publish,
+        .correlation_id = 19,
+        .node_hex = node_hex,
+        .payload = "",
+    });
+    defer std.testing.allocator.free(bad_publish);
+    try std.testing.expectError(MeshError.InvalidPeerRecord, server.handle(std.testing.allocator, bad_publish));
 }
