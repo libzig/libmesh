@@ -1,5 +1,6 @@
 const std = @import("std");
 const MeshError = @import("../common/error.zig").MeshError;
+const guard = @import("../integration/negotiation_guard.zig");
 const Endpoint = @import("../integration/session_endpoint.zig").Endpoint;
 const protocol = @import("protocol.zig");
 const Exchange = @import("exchange.zig").Exchange;
@@ -30,6 +31,11 @@ pub const SessionTransport = struct {
         const incoming = (try self.server.recvEnvelope(allocator)) orelse return false;
         defer incoming.deinit(allocator);
         if (incoming.envelope.kind != .request) return MeshError.InvalidPeerRecord;
+        const negotiated = try guard.validate(.{
+            .version = .{ .major = 1, .minor = 0, .patch = 0 },
+            .capabilities = .{ .signaling = true },
+        }, incoming.envelope);
+        try guard.requireCapability(negotiated, .signaling);
 
         const message = try protocol.decode(incoming.envelope.payload);
         try self.exchange.send(message.from_node, message.to_node, message);
@@ -95,4 +101,74 @@ test "signaling session transport processes request and updates rendezvous" {
     try std.testing.expect(try transport.pumpServer(std.testing.allocator));
     try transport.recvAck(std.testing.allocator, 77);
     try std.testing.expect(rendezvous.isAccepted(77));
+}
+
+test "signaling session transport rejects mismatched major versions" {
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    var exchange = Exchange.init(std.testing.allocator);
+    defer exchange.deinit();
+    var rendezvous = Rendezvous.init(std.testing.allocator);
+    defer rendezvous.deinit();
+
+    const transport = SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-signal",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-signal", .bus = &bus },
+        .exchange = &exchange,
+        .rendezvous = &rendezvous,
+    };
+    const payload = try protocol.encode(std.testing.allocator, .{
+        .kind = .connect_request,
+        .from_node = "node-a",
+        .to_node = "node-b",
+        .correlation_id = 79,
+        .payload = "",
+    });
+    defer std.testing.allocator.free(payload);
+
+    try transport.client.sendEnvelope(std.testing.allocator, "mesh-signal", .{
+        .kind = .request,
+        .correlation_id = 79,
+        .version = .{ .major = 2, .minor = 0, .patch = 0 },
+        .capabilities = .{ .signaling = true },
+        .payload = payload,
+    });
+    try std.testing.expectError(MeshError.InvalidVersion, transport.pumpServer(std.testing.allocator));
+}
+
+test "signaling session transport rejects missing signaling capability" {
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    var exchange = Exchange.init(std.testing.allocator);
+    defer exchange.deinit();
+    var rendezvous = Rendezvous.init(std.testing.allocator);
+    defer rendezvous.deinit();
+
+    const transport = SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-signal",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-signal", .bus = &bus },
+        .exchange = &exchange,
+        .rendezvous = &rendezvous,
+    };
+    const payload = try protocol.encode(std.testing.allocator, .{
+        .kind = .connect_request,
+        .from_node = "node-a",
+        .to_node = "node-b",
+        .correlation_id = 80,
+        .payload = "",
+    });
+    defer std.testing.allocator.free(payload);
+
+    try transport.client.sendEnvelope(std.testing.allocator, "mesh-signal", .{
+        .kind = .request,
+        .correlation_id = 80,
+        .version = .{ .major = 1, .minor = 0, .patch = 0 },
+        .capabilities = .{},
+        .payload = payload,
+    });
+    try std.testing.expectError(MeshError.AccessDenied, transport.pumpServer(std.testing.allocator));
 }
