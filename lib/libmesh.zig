@@ -22,6 +22,8 @@ pub const peer = struct {
     pub const endpoint = @import("peer/endpoint.zig");
     pub const peer_record = @import("peer/peer_record.zig");
     pub const relay_hint = @import("peer/relay_hint.zig");
+    pub const resolved_peer = @import("peer/resolved_peer.zig");
+    pub const route_candidate = @import("peer/route_candidate.zig");
 };
 
 pub const discovery = struct {
@@ -54,6 +56,8 @@ test "libmesh foundation imports libself and libfast" {
     _ = peer.endpoint;
     _ = peer.peer_record;
     _ = peer.relay_hint;
+    _ = peer.resolved_peer;
+    _ = peer.route_candidate;
     _ = discovery.store;
     _ = signaling.protocol;
     _ = signaling.rendezvous;
