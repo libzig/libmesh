@@ -62,6 +62,7 @@ pub const integration = struct {
     pub const control_session = @import("integration/control_session.zig");
     pub const libdice_contract = @import("integration/libdice_contract.zig");
     pub const libfast = @import("integration/libfast.zig");
+    pub const libfast_adapter = @import("integration/libfast_adapter.zig");
     pub const libself = @import("integration/libself.zig");
     pub const negotiation_guard = @import("integration/negotiation_guard.zig");
     pub const node_orchestrator = @import("integration/node_orchestrator.zig");
@@ -148,6 +149,7 @@ test "libmesh foundation imports libself and libfast" {
     _ = relay.bridge_datagrams;
     _ = relay.client;
     _ = integration.libfast;
+    _ = integration.libfast_adapter;
     _ = integration.libself;
     _ = integration.control_session;
     _ = integration.libdice_contract;
