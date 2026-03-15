@@ -36,6 +36,7 @@ pub const Negotiated = struct {
 
 pub fn encode(allocator: std.mem.Allocator, envelope: Envelope) MeshError![]u8 {
     if (envelope.correlation_id == 0) return MeshError.InvalidPeerRecord;
+    if (std.mem.indexOfScalar(u8, envelope.payload, '|') != null) return MeshError.InvalidPeerRecord;
     return std.fmt.allocPrint(allocator, "{s}|{d}|{d}.{d}.{d}|{d}{d}{d}{d}|{s}", .{
         envelope.kind.asText(),
         envelope.correlation_id,
@@ -179,4 +180,14 @@ test "control session negotiation rejects incompatible major versions" {
         .payload = "ok",
     };
     try std.testing.expectError(MeshError.InvalidVersion, negotiate(local_version, .{}, remote));
+}
+
+test "control session encode rejects delimiter in payload" {
+    try std.testing.expectError(MeshError.InvalidPeerRecord, encode(std.testing.allocator, .{
+        .kind = .request,
+        .correlation_id = 77,
+        .version = .{ .major = 1, .minor = 0, .patch = 0 },
+        .capabilities = .{ .discovery = true },
+        .payload = "bad|payload",
+    }));
 }
