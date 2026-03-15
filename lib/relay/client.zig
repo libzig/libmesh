@@ -26,6 +26,12 @@ pub fn decodeOpenResult(raw: []const u8) MeshError!protocol.Message {
     };
 }
 
+pub fn decodeOpenResultForSession(raw: []const u8, expected_session_id: u64) MeshError!protocol.Message {
+    const msg = try decodeOpenResult(raw);
+    if (msg.session_id != expected_session_id) return MeshError.InvalidPeerRecord;
+    return msg;
+}
+
 test "relay client builds open and close messages" {
     const allocator = std.testing.allocator;
     const open_raw = try buildOpen(allocator, 41, "target-node");
@@ -58,4 +64,18 @@ test "relay client decodeOpenResult accepts only accept/deny" {
     });
     defer allocator.free(open_raw);
     try std.testing.expectError(MeshError.InvalidPeerRecord, decodeOpenResult(open_raw));
+}
+
+test "relay client decodeOpenResultForSession validates expected session id" {
+    const allocator = std.testing.allocator;
+    const accept_raw = try protocol.encode(allocator, .{
+        .kind = .accept,
+        .session_id = 42,
+        .payload = "ok",
+    });
+    defer allocator.free(accept_raw);
+
+    const accepted = try decodeOpenResultForSession(accept_raw, 42);
+    try std.testing.expectEqual(protocol.MessageKind.accept, accepted.kind);
+    try std.testing.expectError(MeshError.InvalidPeerRecord, decodeOpenResultForSession(accept_raw, 43));
 }
