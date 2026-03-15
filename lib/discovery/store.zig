@@ -2,6 +2,7 @@ const std = @import("std");
 const libself = @import("libself");
 const MeshError = @import("../common/error.zig").MeshError;
 const PeerRecord = @import("../peer/peer_record.zig").PeerRecord;
+const mesh_time = @import("../common/time.zig");
 
 const Entry = struct {
     node_id: libself.NodeId,
@@ -48,6 +49,12 @@ pub const InMemoryStore = struct {
         return self.entries.items[idx].record;
     }
 
+    pub fn lookupAt(self: *const InMemoryStore, node_id: libself.NodeId, now_ms: mesh_time.TimestampMs) MeshError!PeerRecord {
+        const record = try self.lookup(node_id);
+        if (mesh_time.expired(now_ms, record.expires_at_ms)) return MeshError.Expired;
+        return record;
+    }
+
     pub fn refresh(self: *InMemoryStore, record: PeerRecord, signer_public_key: libself.identity.PublicKey, now_ms: u64) MeshError!void {
         const idx = self.findIndex(record.node_id) orelse return MeshError.NotFound;
         try record.validate(now_ms);
@@ -61,6 +68,22 @@ pub const InMemoryStore = struct {
         const idx = self.findIndex(node_id) orelse return MeshError.NotFound;
         const removed = self.entries.swapRemove(idx);
         self.freeRecord(removed.record);
+    }
+
+    pub fn pruneExpired(self: *InMemoryStore, now_ms: mesh_time.TimestampMs) usize {
+        var removed: usize = 0;
+        var idx: usize = 0;
+        while (idx < self.entries.items.len) {
+            const record = self.entries.items[idx].record;
+            if (mesh_time.expired(now_ms, record.expires_at_ms)) {
+                const stale = self.entries.swapRemove(idx);
+                self.freeRecord(stale.record);
+                removed += 1;
+                continue;
+            }
+            idx += 1;
+        }
+        return removed;
     }
 
     fn findIndex(self: *const InMemoryStore, node_id: libself.NodeId) ?usize {
@@ -217,4 +240,67 @@ test "InMemoryStore refresh and withdraw enforce lifecycle" {
 
     try store.withdraw(record.node_id);
     try std.testing.expectError(MeshError.NotFound, store.lookup(record.node_id));
+}
+
+test "InMemoryStore lookupAt returns Expired once record expiry is reached" {
+    var store = InMemoryStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const key_pair = try libself.identity.KeyPair.fromSeed([_]u8{0x34} ** 32);
+    const endpoints = [_]@import("../peer/endpoint.zig").PublishedEndpoint{
+        .{ .host = "203.0.113.91", .port = 4433 },
+    };
+    const hints = [_]@import("../peer/relay_hint.zig").RelayHint{
+        .{ .relay_id = "relay-expired", .relay_address = "relay.example.net:7443" },
+    };
+    var record = PeerRecord{
+        .node_id = libself.NodeId.fromPublicKey(key_pair.public_key),
+        .published_at_ms = 10,
+        .expires_at_ms = 50,
+        .endpoints = &endpoints,
+        .relay_hints = &hints,
+    };
+    try record.sign(std.testing.allocator, key_pair);
+    try store.publish(record, key_pair.public_key, 20);
+
+    _ = try store.lookupAt(record.node_id, 50);
+    try std.testing.expectError(MeshError.Expired, store.lookupAt(record.node_id, 51));
+}
+
+test "InMemoryStore pruneExpired removes stale entries and keeps fresh entries" {
+    var store = InMemoryStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const a = try libself.identity.KeyPair.fromSeed([_]u8{0x35} ** 32);
+    const b = try libself.identity.KeyPair.fromSeed([_]u8{0x36} ** 32);
+    const endpoints = [_]@import("../peer/endpoint.zig").PublishedEndpoint{
+        .{ .host = "203.0.113.92", .port = 4433 },
+    };
+    const hints = [_]@import("../peer/relay_hint.zig").RelayHint{
+        .{ .relay_id = "relay-prune", .relay_address = "relay.example.net:8443" },
+    };
+
+    var stale = PeerRecord{
+        .node_id = libself.NodeId.fromPublicKey(a.public_key),
+        .published_at_ms = 10,
+        .expires_at_ms = 40,
+        .endpoints = &endpoints,
+        .relay_hints = &hints,
+    };
+    try stale.sign(std.testing.allocator, a);
+    try store.publish(stale, a.public_key, 20);
+
+    var fresh = PeerRecord{
+        .node_id = libself.NodeId.fromPublicKey(b.public_key),
+        .published_at_ms = 10,
+        .expires_at_ms = 400,
+        .endpoints = &endpoints,
+        .relay_hints = &hints,
+    };
+    try fresh.sign(std.testing.allocator, b);
+    try store.publish(fresh, b.public_key, 20);
+
+    try std.testing.expectEqual(@as(usize, 1), store.pruneExpired(100));
+    try std.testing.expectError(MeshError.NotFound, store.lookup(stale.node_id));
+    _ = try store.lookup(fresh.node_id);
 }
