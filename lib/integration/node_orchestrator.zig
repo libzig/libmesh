@@ -1,6 +1,8 @@
 const std = @import("std");
 const MeshError = @import("../common/error.zig").MeshError;
+const PeerRecord = @import("../peer/peer_record.zig").PeerRecord;
 const ResolvedPeer = @import("../peer/resolved_peer.zig").ResolvedPeer;
+const RouteCandidate = @import("../peer/route_candidate.zig").RouteCandidate;
 const routing_policy = @import("../routing/policy.zig");
 const orchestrator = @import("../routing/orchestrator.zig");
 const libdice_contract = @import("libdice_contract.zig");
@@ -38,6 +40,58 @@ pub fn connect(
             .none => return MeshError.NotFound,
         },
     };
+}
+
+pub fn connectViaSessionControl(
+    allocator: std.mem.Allocator,
+    record: PeerRecord,
+    runtime: routing_policy.Runtime,
+    discovery_transport: @import("../discovery/session_transport.zig").SessionTransport,
+    signaling_transport: ?@import("../signaling/session_transport.zig").SessionTransport,
+    relay_transport: ?@import("../relay/session_transport.zig").SessionTransport,
+) MeshError!Result {
+    try discovery_transport.publishRoundTrip(allocator, 1001, record, .{ .max_attempts = 2 });
+    var parsed = try discovery_transport.lookupRoundTrip(allocator, 1002, record.node_id, .{ .max_attempts = 2 });
+    defer parsed.deinit();
+
+    const direct_routes = if (parsed.record.endpoints.len == 0)
+        &[_]RouteCandidate{}
+    else
+        &[_]RouteCandidate{.{ .kind = .direct, .priority = 10 }};
+    const relay_routes = if (parsed.record.relay_hints.len == 0)
+        &[_]RouteCandidate{}
+    else
+        &[_]RouteCandidate{.{ .kind = .relay, .priority = 9 }};
+
+    const resolved = ResolvedPeer{
+        .record = parsed.record,
+        .direct_routes = direct_routes,
+        .relay_routes = relay_routes,
+    };
+    const result = try connect(allocator, resolved, runtime);
+
+    switch (result.decision) {
+        .signaling_then_direct => {
+            const signaling = signaling_transport orelse return MeshError.NotFound;
+            try signaling.roundTrip(allocator, .{
+                .kind = .setup_payload,
+                .from_node = "node-a",
+                .to_node = "node-b",
+                .correlation_id = 1003,
+                .payload = "ice:offer",
+            }, .{ .max_attempts = 2 });
+        },
+        .relay => {
+            const relay = relay_transport orelse return MeshError.NotFound;
+            _ = try relay.roundTrip(allocator, .{
+                .kind = .open,
+                .session_id = 1004,
+                .payload = "node-b",
+            }, .{ .max_attempts = 2 }, true);
+        },
+        else => {},
+    }
+    return result;
 }
 
 fn fixtureResolvedPeer() ResolvedPeer {
@@ -89,4 +143,138 @@ test "node orchestrator returns relay outcome when direct route is disabled" {
     });
     try std.testing.expectEqual(Outcome.relay, result.outcome);
     try std.testing.expect(result.contract.use_relay_fallback);
+}
+
+test "node orchestrator session-control path returns direct outcome" {
+    var bus = @import("session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    var store = @import("../discovery/store.zig").InMemoryStore.init(std.testing.allocator);
+    defer store.deinit();
+    var exchange = @import("../signaling/exchange.zig").Exchange.init(std.testing.allocator);
+    defer exchange.deinit();
+    var rendezvous = @import("../signaling/rendezvous.zig").Rendezvous.init(std.testing.allocator);
+    defer rendezvous.deinit();
+
+    const discovery = @import("../discovery/session_transport.zig").SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-discovery",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-discovery", .bus = &bus },
+        .handler = .{ .store = &store },
+    };
+    const signaling = @import("../signaling/session_transport.zig").SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-signal",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-signal", .bus = &bus },
+        .exchange = &exchange,
+        .rendezvous = &rendezvous,
+    };
+    const relay = @import("../relay/session_transport.zig").SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-relay",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-relay", .bus = &bus },
+    };
+
+    const kp = try @import("libself").identity.KeyPair.fromSeed([_]u8{0xd2} ** 32);
+    const did = try @import("libself").DidKey.fromKeyPair(kp).encode(std.testing.allocator);
+    defer std.testing.allocator.free(did);
+    const endpoints = [_]@import("../peer/endpoint.zig").PublishedEndpoint{
+        .{ .host = "198.51.100.240", .port = 4433, .priority = 10 },
+    };
+    const hints = [_]@import("../peer/relay_hint.zig").RelayHint{
+        .{ .relay_id = "relay-orch-a", .relay_address = "relay.example.net:8443", .priority = 9 },
+    };
+    var record = PeerRecord{
+        .node_id = @import("libself").NodeId.fromPublicKey(kp.public_key),
+        .did = did,
+        .published_at_ms = 10,
+        .expires_at_ms = 1000,
+        .endpoints = &endpoints,
+        .relay_hints = &hints,
+    };
+    try record.sign(std.testing.allocator, kp);
+
+    const result = try connectViaSessionControl(
+        std.testing.allocator,
+        record,
+        .{},
+        discovery,
+        signaling,
+        relay,
+    );
+    try std.testing.expectEqual(Outcome.direct, result.outcome);
+}
+
+test "node orchestrator session-control path returns signaling/direct and relay outcomes" {
+    var bus = @import("session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    var store = @import("../discovery/store.zig").InMemoryStore.init(std.testing.allocator);
+    defer store.deinit();
+    var exchange = @import("../signaling/exchange.zig").Exchange.init(std.testing.allocator);
+    defer exchange.deinit();
+    var rendezvous = @import("../signaling/rendezvous.zig").Rendezvous.init(std.testing.allocator);
+    defer rendezvous.deinit();
+
+    const discovery = @import("../discovery/session_transport.zig").SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-discovery",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-discovery", .bus = &bus },
+        .handler = .{ .store = &store },
+    };
+    const signaling = @import("../signaling/session_transport.zig").SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-signal",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-signal", .bus = &bus },
+        .exchange = &exchange,
+        .rendezvous = &rendezvous,
+    };
+    const relay = @import("../relay/session_transport.zig").SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-relay",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-relay", .bus = &bus },
+    };
+
+    const kp = try @import("libself").identity.KeyPair.fromSeed([_]u8{0xd3} ** 32);
+    const did = try @import("libself").DidKey.fromKeyPair(kp).encode(std.testing.allocator);
+    defer std.testing.allocator.free(did);
+    const endpoints = [_]@import("../peer/endpoint.zig").PublishedEndpoint{
+        .{ .host = "198.51.100.241", .port = 4433, .priority = 10 },
+    };
+    const hints = [_]@import("../peer/relay_hint.zig").RelayHint{
+        .{ .relay_id = "relay-orch-b", .relay_address = "relay.example.net:9443", .priority = 9 },
+    };
+    var record = PeerRecord{
+        .node_id = @import("libself").NodeId.fromPublicKey(kp.public_key),
+        .did = did,
+        .published_at_ms = 10,
+        .expires_at_ms = 1000,
+        .endpoints = &endpoints,
+        .relay_hints = &hints,
+    };
+    try record.sign(std.testing.allocator, kp);
+
+    const signaled = try connectViaSessionControl(
+        std.testing.allocator,
+        record,
+        .{ .needs_traversal = true, .dice_available = true },
+        discovery,
+        signaling,
+        relay,
+    );
+    try std.testing.expectEqual(Outcome.direct_after_signaling, signaled.outcome);
+
+    const relayed = try connectViaSessionControl(
+        std.testing.allocator,
+        record,
+        .{ .direct_disabled = true },
+        discovery,
+        signaling,
+        relay,
+    );
+    try std.testing.expectEqual(Outcome.relay, relayed.outcome);
 }
