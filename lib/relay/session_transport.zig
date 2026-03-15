@@ -1,5 +1,6 @@
 const std = @import("std");
 const MeshError = @import("../common/error.zig").MeshError;
+const guard = @import("../integration/negotiation_guard.zig");
 const Endpoint = @import("../integration/session_endpoint.zig").Endpoint;
 const protocol = @import("protocol.zig");
 
@@ -28,6 +29,14 @@ pub const SessionTransport = struct {
         const incoming = (try self.server.recvEnvelope(allocator)) orelse return false;
         defer incoming.deinit(allocator);
         if (incoming.envelope.kind != .request) return MeshError.InvalidPeerRecord;
+        const negotiated = try guard.validate(.{
+            .version = .{ .major = 1, .minor = 0, .patch = 0 },
+            .capabilities = .{
+                .relay_stream = true,
+                .relay_datagram = true,
+            },
+        }, incoming.envelope);
+        try guard.requireCapability(negotiated, .relay_stream);
         const request = try protocol.decode(incoming.envelope.payload);
 
         const response_payload = try protocol.encode(allocator, switch (request.kind) {
@@ -104,4 +113,56 @@ test "relay session transport open can be denied by server policy" {
     try std.testing.expect(try transport.pumpServer(std.testing.allocator, false));
     const response = try transport.recv(std.testing.allocator, 901);
     try std.testing.expectEqual(protocol.MessageKind.deny, response.kind);
+}
+
+test "relay session transport rejects incompatible major versions" {
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    const transport = SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-relay",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-relay", .bus = &bus },
+    };
+    const payload = try protocol.encode(std.testing.allocator, .{
+        .kind = .open,
+        .session_id = 902,
+        .payload = "node-b",
+    });
+    defer std.testing.allocator.free(payload);
+
+    try transport.client.sendEnvelope(std.testing.allocator, "mesh-relay", .{
+        .kind = .request,
+        .correlation_id = 902,
+        .version = .{ .major = 2, .minor = 0, .patch = 0 },
+        .capabilities = .{ .relay_stream = true },
+        .payload = payload,
+    });
+    try std.testing.expectError(MeshError.InvalidVersion, transport.pumpServer(std.testing.allocator, true));
+}
+
+test "relay session transport rejects missing relay stream capability" {
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    const transport = SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-relay",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-relay", .bus = &bus },
+    };
+    const payload = try protocol.encode(std.testing.allocator, .{
+        .kind = .open,
+        .session_id = 903,
+        .payload = "node-b",
+    });
+    defer std.testing.allocator.free(payload);
+
+    try transport.client.sendEnvelope(std.testing.allocator, "mesh-relay", .{
+        .kind = .request,
+        .correlation_id = 903,
+        .version = .{ .major = 1, .minor = 0, .patch = 0 },
+        .capabilities = .{},
+        .payload = payload,
+    });
+    try std.testing.expectError(MeshError.AccessDenied, transport.pumpServer(std.testing.allocator, true));
 }
