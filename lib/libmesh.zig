@@ -90,6 +90,7 @@ pub const scenario = struct {
     pub const direct_case = @import("scenario/direct_case.zig");
     pub const failure_modes = @import("scenario/failure_modes.zig");
     pub const relay_fallback_case = @import("scenario/relay_fallback_case.zig");
+    pub const session_direct_case = @import("scenario/session_direct_case.zig");
     pub const signaling_dice_case = @import("scenario/signaling_dice_case.zig");
 };
 
@@ -160,5 +161,6 @@ test "libmesh foundation imports libself and libfast" {
     _ = scenario.direct_case;
     _ = scenario.failure_modes;
     _ = scenario.relay_fallback_case;
+    _ = scenario.session_direct_case;
     _ = scenario.signaling_dice_case;
 }
