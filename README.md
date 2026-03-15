@@ -73,3 +73,7 @@ Default route policy is:
 make build
 make test
 ```
+
+## Examples
+
+See [docs/EXAMPLES.md](docs/EXAMPLES.md) for scenario-driven example entry points.
