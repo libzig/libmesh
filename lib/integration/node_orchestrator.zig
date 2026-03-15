@@ -81,7 +81,7 @@ pub fn connectAndOpenSession(
 
         const relay_contract = libdice_contract.fromDecision(relay_plan.decision);
         try libdice_contract.validateBoundary(relay_contract);
-        const relay_session = libfast_adapter.Session.openAny(driver, relay_plan.targets) catch return primary_err;
+        const relay_session = libfast_adapter.Session.openAny(driver, relay_plan.targets) catch |relay_err| return relay_err;
         result = .{
             .decision = relay_plan.decision,
             .contract = relay_contract,
@@ -422,4 +422,37 @@ test "node orchestrator connectAndOpenSession falls back to relay when direct op
     try std.testing.expect(opened.used_relay_fallback);
     try std.testing.expect(fake.saw_relay);
     try std.testing.expectEqual(@as(usize, 2), fake.attempts);
+}
+
+test "node orchestrator returns relay error when fallback attempt fails after direct failure" {
+    const Fake = struct {
+        const Self = @This();
+        fn connect(_: *anyopaque, target: @import("libfast.zig").ConnectionTarget) MeshError!libfast_adapter.ConnectionId {
+            return switch (target) {
+                .direct => MeshError.NotFound,
+                .relay => MeshError.AccessDenied,
+            };
+        }
+        fn send(_: *anyopaque, _: libfast_adapter.ConnectionId, _: []const u8) MeshError!void {}
+        fn recv(_: *anyopaque, _: std.mem.Allocator, _: libfast_adapter.ConnectionId) MeshError!?[]u8 {
+            return null;
+        }
+        fn close(_: *anyopaque, _: libfast_adapter.ConnectionId) MeshError!void {}
+    };
+
+    var fake: u8 = 0;
+    const driver = libfast_adapter.Driver{
+        .ctx = &fake,
+        .vtable = &.{
+            .connect = Fake.connect,
+            .send = Fake.send,
+            .recv = Fake.recv,
+            .close = Fake.close,
+        },
+    };
+
+    try std.testing.expectError(
+        MeshError.AccessDenied,
+        connectAndOpenSession(std.testing.allocator, fixtureResolvedPeer(), .{}, driver),
+    );
 }
