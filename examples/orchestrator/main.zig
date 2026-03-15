@@ -196,3 +196,36 @@ test "orchestrator example falls back to relay session through driver helper" {
     try std.testing.expectEqual(@as(libmesh.integration.libfast_adapter.ConnectionId, 9401), opened.session.connection_id);
     try std.testing.expect(opened.used_relay_fallback);
 }
+
+test "orchestrator example chooses relay when traversal is required but libdice is unavailable" {
+    const key_pair = try libmesh.Foundation.KeyPair.fromSeed([_]u8{0x75} ** 32);
+    const endpoints = [_]libmesh.peer.endpoint.PublishedEndpoint{
+        .{ .host = "198.51.100.234", .port = 4433, .priority = 10 },
+    };
+    const relay_hints = [_]libmesh.peer.relay_hint.RelayHint{
+        .{ .relay_id = "relay-orchestrator-5", .relay_address = "relay.example.net:8443", .priority = 8 },
+    };
+    const direct_routes = [_]libmesh.peer.route_candidate.RouteCandidate{
+        .{ .kind = .direct, .priority = 10 },
+    };
+    const relay_routes = [_]libmesh.peer.route_candidate.RouteCandidate{
+        .{ .kind = .relay, .priority = 8 },
+    };
+    const resolved = libmesh.peer.resolved_peer.ResolvedPeer{
+        .record = .{
+            .node_id = libmesh.Foundation.NodeId.fromPublicKey(key_pair.public_key),
+            .published_at_ms = 10,
+            .expires_at_ms = 1000,
+            .endpoints = &endpoints,
+            .relay_hints = &relay_hints,
+        },
+        .direct_routes = &direct_routes,
+        .relay_routes = &relay_routes,
+    };
+
+    const result = try libmesh.integration.node_orchestrator.connect(std.testing.allocator, resolved, .{
+        .needs_traversal = true,
+        .dice_available = false,
+    });
+    try std.testing.expectEqual(libmesh.integration.node_orchestrator.Outcome.relay, result.outcome);
+}
