@@ -17,6 +17,7 @@ pub const Server = struct {
             .publish => blk: {
                 var parsed = try peer_record.parseWirePayload(allocator, msg.payload);
                 defer parsed.deinit();
+                if (!std.mem.eql(u8, msg.node_hex, &parsed.record.node_id.toHex())) return MeshError.InvalidPeerRecord;
                 const signer_key = try signerKeyFromDid(allocator, parsed.record.did);
                 try requirePublishTimeWithinSkew(parsed.record.published_at_ms);
                 try self.store.publish(parsed.record, signer_key, parsed.record.published_at_ms);
@@ -47,6 +48,7 @@ pub const Server = struct {
             .refresh => blk: {
                 var parsed = try peer_record.parseWirePayload(allocator, msg.payload);
                 defer parsed.deinit();
+                if (!std.mem.eql(u8, msg.node_hex, &parsed.record.node_id.toHex())) return MeshError.InvalidPeerRecord;
                 const signer_key = try signerKeyFromDid(allocator, parsed.record.did);
                 try requirePublishTimeWithinSkew(parsed.record.published_at_ms);
                 try self.store.refresh(parsed.record, signer_key, parsed.record.published_at_ms);
@@ -217,4 +219,42 @@ test "discovery server rejects publish records dated in the future" {
     const publish_msg = try @import("client.zig").buildPublish(std.testing.allocator, 15, record);
     defer std.testing.allocator.free(publish_msg);
     try std.testing.expectError(MeshError.InvalidPeerRecord, server.handle(std.testing.allocator, publish_msg));
+}
+
+test "discovery server rejects publish payload when node hex does not match signed record node id" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+    const server = Server{ .store = &store };
+
+    const kp = try libself.identity.KeyPair.fromSeed([_]u8{0xd8} ** 32);
+    const did = try libself.DidKey.fromKeyPair(kp).encode(std.testing.allocator);
+    defer std.testing.allocator.free(did);
+    const endpoints = [_]@import("../peer/endpoint.zig").PublishedEndpoint{
+        .{ .host = "203.0.113.79", .port = 4433 },
+    };
+    const hints = [_]@import("../peer/relay_hint.zig").RelayHint{
+        .{ .relay_id = "relay-node-mismatch", .relay_address = "relay.example.net:8443" },
+    };
+    var record = @import("../peer/peer_record.zig").PeerRecord{
+        .node_id = libself.NodeId.fromPublicKey(kp.public_key),
+        .did = did,
+        .published_at_ms = 5,
+        .expires_at_ms = 500,
+        .endpoints = &endpoints,
+        .relay_hints = &hints,
+    };
+    try record.sign(std.testing.allocator, kp);
+
+    const publish_msg = try @import("client.zig").buildPublish(std.testing.allocator, 16, record);
+    defer std.testing.allocator.free(publish_msg);
+    const decoded = try protocol.decode(publish_msg);
+    const tampered = try protocol.encode(std.testing.allocator, .{
+        .kind = .publish,
+        .correlation_id = decoded.correlation_id,
+        .node_hex = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        .payload = decoded.payload,
+    });
+    defer std.testing.allocator.free(tampered);
+
+    try std.testing.expectError(MeshError.InvalidPeerRecord, server.handle(std.testing.allocator, tampered));
 }
