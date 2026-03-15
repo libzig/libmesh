@@ -74,6 +74,7 @@ pub const Server = struct {
         for (self.sessions.items, 0..) |active, idx| {
             if (active.id == session_id) {
                 _ = self.sessions.swapRemove(idx);
+                _ = self.matcher.removePendingSession(session_id);
                 return true;
             }
         }
@@ -152,7 +153,9 @@ test "relay server close removes active session" {
     defer allocator.free(target_did);
 
     _ = try server.open(7, source.public_key, source_did, target.public_key, target_did);
+    try std.testing.expectEqual(@as(usize, 1), matcher.pendingCount());
     try std.testing.expect(server.close(7));
+    try std.testing.expectEqual(@as(usize, 0), matcher.pendingCount());
     try std.testing.expectEqual(@as(usize, 0), server.activeCount());
     try std.testing.expect(!server.close(7));
 }

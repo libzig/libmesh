@@ -62,6 +62,16 @@ pub const Matcher = struct {
     pub fn pendingCount(self: *const Matcher) usize {
         return self.pending.items.len;
     }
+
+    pub fn removePendingSession(self: *Matcher, session_id: u64) bool {
+        for (self.pending.items, 0..) |item, idx| {
+            if (item.session_id == session_id) {
+                _ = self.pending.swapRemove(idx);
+                return true;
+            }
+        }
+        return false;
+    }
 };
 
 fn sameNode(a: libself.NodeId, b: libself.NodeId) bool {
@@ -140,4 +150,25 @@ test "matcher rejects duplicate session ids while pending" {
         .authenticated = true,
     };
     try std.testing.expectError(MeshError.Duplicate, matcher.register(dup));
+}
+
+test "matcher removePendingSession removes queued entries by session id" {
+    const source = try libself.identity.KeyPair.fromSeed([_]u8{0xc7} ** 32);
+    const target = try libself.identity.KeyPair.fromSeed([_]u8{0xc8} ** 32);
+    var matcher = Matcher.init(std.testing.allocator);
+    defer matcher.deinit();
+
+    const pending = RelaySession{
+        .id = 333,
+        .source_node_id = libself.NodeId.fromPublicKey(source.public_key),
+        .target_node_id = libself.NodeId.fromPublicKey(target.public_key),
+        .source_did = "did:key:source",
+        .target_did = "did:key:target",
+        .authenticated = true,
+    };
+    try std.testing.expect((try matcher.register(pending)) == null);
+    try std.testing.expectEqual(@as(usize, 1), matcher.pendingCount());
+    try std.testing.expect(matcher.removePendingSession(333));
+    try std.testing.expectEqual(@as(usize, 0), matcher.pendingCount());
+    try std.testing.expect(!matcher.removePendingSession(333));
 }
