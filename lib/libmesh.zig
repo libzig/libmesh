@@ -65,6 +65,7 @@ pub const relay = struct {
     pub const matcher = @import("relay/matcher.zig");
     pub const policy = @import("relay/policy.zig");
     pub const protocol = @import("relay/protocol.zig");
+    pub const service = @import("relay/service.zig");
     pub const server = @import("relay/server.zig");
     pub const session = @import("relay/session.zig");
 };
@@ -118,6 +119,7 @@ test "libmesh foundation imports libself and libfast" {
     _ = relay.matcher;
     _ = relay.policy;
     _ = relay.protocol;
+    _ = relay.service;
     _ = relay.server;
     _ = relay.session;
 }
