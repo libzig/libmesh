@@ -36,6 +36,7 @@ pub const auth = struct {
 
 pub const discovery = struct {
     pub const client = @import("discovery/client.zig");
+    pub const expire = @import("discovery/expire.zig");
     pub const lookup = @import("discovery/lookup.zig");
     pub const protocol = @import("discovery/protocol.zig");
     pub const publish = @import("discovery/publish.zig");
@@ -107,6 +108,7 @@ test "libmesh foundation imports libself and libfast" {
     _ = auth.record_verifier;
     _ = auth.trust_bridge;
     _ = discovery.client;
+    _ = discovery.expire;
     _ = discovery.lookup;
     _ = discovery.protocol;
     _ = discovery.publish;
