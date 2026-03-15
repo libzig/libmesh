@@ -29,17 +29,47 @@ pub fn endpointToTarget(endpoint: PublishedEndpoint) MeshError!ConnectionTarget 
     };
 }
 
+const HostPort = struct {
+    host: []const u8,
+    port: u16,
+};
+
+fn parseHostPort(address: []const u8) MeshError!HostPort {
+    if (address.len == 0) return MeshError.InvalidRelayHint;
+    var host: []const u8 = undefined;
+    var port_text: []const u8 = undefined;
+
+    if (address[0] == '[') {
+        const close_idx = std.mem.indexOfScalar(u8, address, ']') orelse return MeshError.InvalidRelayHint;
+        if (close_idx <= 1 or close_idx + 2 > address.len or address[close_idx + 1] != ':') {
+            return MeshError.InvalidRelayHint;
+        }
+        host = address[1..close_idx];
+        port_text = address[close_idx + 2 ..];
+    } else {
+        const idx = std.mem.lastIndexOfScalar(u8, address, ':') orelse return MeshError.InvalidRelayHint;
+        host = address[0..idx];
+        port_text = address[idx + 1 ..];
+        if (std.mem.indexOfScalar(u8, host, ':') != null) return MeshError.InvalidRelayHint;
+    }
+
+    if (host.len == 0 or port_text.len == 0) return MeshError.InvalidRelayHint;
+    const port = std.fmt.parseInt(u16, port_text, 10) catch return MeshError.InvalidRelayHint;
+    return .{
+        .host = host,
+        .port = port,
+    };
+}
+
 pub fn relayHintToTarget(hint: RelayHint) MeshError!ConnectionTarget {
     try hint.validate();
-    const idx = std.mem.lastIndexOfScalar(u8, hint.relay_address, ':') orelse return MeshError.InvalidRelayHint;
-    const host = hint.relay_address[0..idx];
-    const port = std.fmt.parseInt(u16, hint.relay_address[idx + 1 ..], 10) catch return MeshError.InvalidRelayHint;
+    const host_port = try parseHostPort(hint.relay_address);
 
     return .{
         .relay = .{
             .relay_id = hint.relay_id,
-            .host = host,
-            .port = port,
+            .host = host_port.host,
+            .port = host_port.port,
             .alpn = hint.relay_alpn,
         },
     };
@@ -118,6 +148,27 @@ test "relayHintToTarget parses relay host and port" {
         },
         else => return error.TestUnexpectedResult,
     }
+}
+
+test "relayHintToTarget parses bracketed ipv6 relay host and port" {
+    const target = try relayHintToTarget(.{
+        .relay_id = "relay-v6",
+        .relay_address = "[2001:db8::99]:9443",
+    });
+    switch (target) {
+        .relay => |relay| {
+            try std.testing.expectEqualStrings("2001:db8::99", relay.host);
+            try std.testing.expectEqual(@as(u16, 9443), relay.port);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "relayHintToTarget rejects unbracketed ipv6 host:port format" {
+    try std.testing.expectError(MeshError.InvalidRelayHint, relayHintToTarget(.{
+        .relay_id = "relay-v6-bad",
+        .relay_address = "2001:db8::99:9443",
+    }));
 }
 
 test "resolveTargets materializes ordered direct and relay targets" {
