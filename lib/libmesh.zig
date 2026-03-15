@@ -18,6 +18,11 @@ pub const common = struct {
     pub const caps = @import("common/caps.zig");
 };
 
+pub const peer = struct {
+    pub const endpoint = @import("peer/endpoint.zig");
+    pub const relay_hint = @import("peer/relay_hint.zig");
+};
+
 test "libmesh foundation imports libself and libfast" {
     const std = @import("std");
     try std.testing.expectEqualStrings("hello from libmesh", hello());
@@ -36,4 +41,6 @@ test "libmesh foundation imports libself and libfast" {
     _ = common.time;
     _ = common.version;
     _ = common.caps;
+    _ = peer.endpoint;
+    _ = peer.relay_hint;
 }
