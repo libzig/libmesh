@@ -2,6 +2,8 @@ const std = @import("std");
 const MeshError = @import("../common/error.zig").MeshError;
 const control = @import("../integration/control_session.zig");
 const guard = @import("../integration/negotiation_guard.zig");
+const request_exchange = @import("../integration/request_exchange.zig");
+const retry = @import("../integration/retry.zig");
 const Endpoint = @import("../integration/session_endpoint.zig").Endpoint;
 const discovery_client = @import("client.zig");
 const discovery_server = @import("server.zig");
@@ -97,6 +99,96 @@ pub const SessionTransport = struct {
         defer response.deinit(allocator);
         const decoded = try protocol.decode(response.envelope.payload);
         if (!std.mem.eql(u8, decoded.payload, "ok")) return MeshError.InvalidPeerRecord;
+    }
+
+    fn pumpAdapter(ctx_ptr: *anyopaque, allocator: std.mem.Allocator) MeshError!bool {
+        const self: *const SessionTransport = @ptrCast(@alignCast(ctx_ptr));
+        return self.pumpServer(allocator);
+    }
+
+    fn roundTripRaw(
+        self: SessionTransport,
+        allocator: std.mem.Allocator,
+        correlation_id: u64,
+        payload: []const u8,
+        policy: retry.Policy,
+    ) MeshError![]u8 {
+        const response = try request_exchange.requestResponse(
+            allocator,
+            self.client,
+            self.server_id,
+            .{
+                .kind = .request,
+                .correlation_id = correlation_id,
+                .version = .{ .major = 1, .minor = 0, .patch = 0 },
+                .capabilities = .{ .discovery = true },
+                .payload = payload,
+            },
+            policy,
+            @constCast(&self),
+            pumpAdapter,
+        );
+        defer response.deinit(allocator);
+        return allocator.dupe(u8, response.envelope.payload) catch MeshError.BufferTooSmall;
+    }
+
+    pub fn publishRoundTrip(
+        self: SessionTransport,
+        allocator: std.mem.Allocator,
+        correlation_id: u64,
+        record: peer_record.PeerRecord,
+        policy: retry.Policy,
+    ) MeshError!void {
+        const request = try discovery_client.buildPublish(allocator, correlation_id, record);
+        defer allocator.free(request);
+        const response = try self.roundTripRaw(allocator, correlation_id, request, policy);
+        defer allocator.free(response);
+        const decoded = try protocol.decode(response);
+        if (!std.mem.eql(u8, decoded.payload, "ok")) return MeshError.InvalidPeerRecord;
+    }
+
+    pub fn refreshRoundTrip(
+        self: SessionTransport,
+        allocator: std.mem.Allocator,
+        correlation_id: u64,
+        record: peer_record.PeerRecord,
+        policy: retry.Policy,
+    ) MeshError!void {
+        const request = try discovery_client.buildRefresh(allocator, correlation_id, record);
+        defer allocator.free(request);
+        const response = try self.roundTripRaw(allocator, correlation_id, request, policy);
+        defer allocator.free(response);
+        const decoded = try protocol.decode(response);
+        if (!std.mem.eql(u8, decoded.payload, "ok")) return MeshError.InvalidPeerRecord;
+    }
+
+    pub fn withdrawRoundTrip(
+        self: SessionTransport,
+        allocator: std.mem.Allocator,
+        correlation_id: u64,
+        node_id: @import("libself").NodeId,
+        policy: retry.Policy,
+    ) MeshError!void {
+        const request = try discovery_client.buildWithdraw(allocator, correlation_id, node_id);
+        defer allocator.free(request);
+        const response = try self.roundTripRaw(allocator, correlation_id, request, policy);
+        defer allocator.free(response);
+        const decoded = try protocol.decode(response);
+        if (!std.mem.eql(u8, decoded.payload, "ok")) return MeshError.InvalidPeerRecord;
+    }
+
+    pub fn lookupRoundTrip(
+        self: SessionTransport,
+        allocator: std.mem.Allocator,
+        correlation_id: u64,
+        node_id: @import("libself").NodeId,
+        policy: retry.Policy,
+    ) MeshError!discovery_client.ParsedPeerRecord {
+        const request = try discovery_client.buildLookup(allocator, correlation_id, node_id);
+        defer allocator.free(request);
+        const response = try self.roundTripRaw(allocator, correlation_id, request, policy);
+        defer allocator.free(response);
+        return discovery_client.parseLookupResponse(allocator, response);
     }
 };
 
@@ -246,4 +338,49 @@ test "discovery session transport rejects missing discovery capability" {
         .payload = wire,
     });
     try std.testing.expectError(MeshError.AccessDenied, transport.pumpServer(std.testing.allocator));
+}
+
+test "discovery session transport roundtrip helpers run publish lookup refresh withdraw" {
+    const libself = @import("libself");
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    var store = @import("store.zig").InMemoryStore.init(std.testing.allocator);
+    defer store.deinit();
+    const transport = SessionTransport{
+        .client_id = "node-client",
+        .server_id = "node-server",
+        .client = .{ .id = "node-client", .bus = &bus },
+        .server = .{ .id = "node-server", .bus = &bus },
+        .handler = .{ .store = &store },
+    };
+
+    const kp = try libself.identity.KeyPair.fromSeed([_]u8{0xe4} ** 32);
+    const did = try libself.DidKey.fromKeyPair(kp).encode(std.testing.allocator);
+    defer std.testing.allocator.free(did);
+    const endpoints = [_]@import("../peer/endpoint.zig").PublishedEndpoint{
+        .{ .host = "198.51.100.213", .port = 4433 },
+    };
+    const hints = [_]@import("../peer/relay_hint.zig").RelayHint{
+        .{ .relay_id = "relay-round", .relay_address = "relay.example.net:9443" },
+    };
+    var record = peer_record.PeerRecord{
+        .node_id = libself.NodeId.fromPublicKey(kp.public_key),
+        .did = did,
+        .published_at_ms = 10,
+        .expires_at_ms = 100,
+        .endpoints = &endpoints,
+        .relay_hints = &hints,
+    };
+    try record.sign(std.testing.allocator, kp);
+
+    try transport.publishRoundTrip(std.testing.allocator, 40, record, .{ .max_attempts = 2 });
+    var parsed = try transport.lookupRoundTrip(std.testing.allocator, 41, record.node_id, .{ .max_attempts = 2 });
+    defer parsed.deinit();
+    try std.testing.expect(try parsed.record.verify(std.testing.allocator, kp.public_key));
+
+    var refreshed = record;
+    refreshed.expires_at_ms = 120;
+    try refreshed.sign(std.testing.allocator, kp);
+    try transport.refreshRoundTrip(std.testing.allocator, 42, refreshed, .{ .max_attempts = 2 });
+    try transport.withdrawRoundTrip(std.testing.allocator, 43, refreshed.node_id, .{ .max_attempts = 2 });
 }
