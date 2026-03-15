@@ -12,6 +12,8 @@ const relay_server_mod = @import("relay/server.zig");
 const relay_service_mod = @import("relay/service.zig");
 const routing_policy = @import("routing/policy.zig");
 const routing_orchestrator = @import("routing/orchestrator.zig");
+const node_orchestrator = @import("integration/node_orchestrator.zig");
+const libfast_adapter = @import("integration/libfast_adapter.zig");
 
 pub fn publishSelf(
     store: *store_mod.InMemoryStore,
@@ -88,6 +90,15 @@ pub fn resolveRoutes(
     runtime: routing_policy.Runtime,
 ) MeshError!routing_orchestrator.Plan {
     return routing_orchestrator.buildPlan(allocator, .{}, peer, runtime);
+}
+
+pub fn connectPeerViaDriver(
+    allocator: std.mem.Allocator,
+    peer: ResolvedPeer,
+    runtime: routing_policy.Runtime,
+    driver: libfast_adapter.Driver,
+) MeshError!node_orchestrator.OpenSessionResult {
+    return node_orchestrator.connectAndOpenSession(allocator, peer, runtime, driver);
 }
 
 test "mesh API publishes and looks up signed peer records" {
@@ -209,4 +220,68 @@ test "mesh API supports freshness-aware lookup and expiry pruning" {
     try std.testing.expectError(MeshError.Expired, lookupPeerAt(&store, key_pair.public_key, record.node_id, 21));
     try std.testing.expectEqual(@as(usize, 1), expirePeers(&store, key_pair.public_key, 21));
     try std.testing.expectError(MeshError.NotFound, lookupPeer(&store, key_pair.public_key, record.node_id));
+}
+
+test "mesh API connectPeerViaDriver opens relay fallback route when direct dial fails" {
+    const kp = try libself.identity.KeyPair.fromSeed([_]u8{0x8c} ** 32);
+    const endpoints = [_]@import("peer/endpoint.zig").PublishedEndpoint{
+        .{ .host = "198.51.100.251", .port = 4433, .priority = 10 },
+    };
+    const hints = [_]@import("peer/relay_hint.zig").RelayHint{
+        .{ .relay_id = "relay-api-driver", .relay_address = "relay.example.net:9443", .priority = 9 },
+    };
+    const direct_routes = [_]@import("peer/route_candidate.zig").RouteCandidate{
+        .{ .kind = .direct, .priority = 10 },
+    };
+    const relay_routes = [_]@import("peer/route_candidate.zig").RouteCandidate{
+        .{ .kind = .relay, .priority = 9 },
+    };
+    const resolved = ResolvedPeer{
+        .record = .{
+            .node_id = libself.NodeId.fromPublicKey(kp.public_key),
+            .published_at_ms = 10,
+            .expires_at_ms = 1000,
+            .endpoints = &endpoints,
+            .relay_hints = &hints,
+        },
+        .direct_routes = &direct_routes,
+        .relay_routes = &relay_routes,
+    };
+
+    const Fake = struct {
+        const Self = @This();
+        relay_attempts: usize = 0,
+        fn connect(ctx_ptr: *anyopaque, target: @import("integration/libfast.zig").ConnectionTarget) MeshError!libfast_adapter.ConnectionId {
+            const ctx: *Self = @ptrCast(@alignCast(ctx_ptr));
+            return switch (target) {
+                .direct => MeshError.NotFound,
+                .relay => blk: {
+                    ctx.relay_attempts += 1;
+                    break :blk 7001;
+                },
+            };
+        }
+        fn send(_: *anyopaque, _: libfast_adapter.ConnectionId, _: []const u8) MeshError!void {}
+        fn recv(_: *anyopaque, _: std.mem.Allocator, _: libfast_adapter.ConnectionId) MeshError!?[]u8 {
+            return null;
+        }
+        fn close(_: *anyopaque, _: libfast_adapter.ConnectionId) MeshError!void {}
+    };
+
+    var fake = Fake{};
+    const driver = libfast_adapter.Driver{
+        .ctx = &fake,
+        .vtable = &.{
+            .connect = Fake.connect,
+            .send = Fake.send,
+            .recv = Fake.recv,
+            .close = Fake.close,
+        },
+    };
+
+    const opened = try connectPeerViaDriver(std.testing.allocator, resolved, .{}, driver);
+    try std.testing.expectEqual(routing_policy.Decision.relay, opened.result.decision);
+    try std.testing.expectEqual(@as(libfast_adapter.ConnectionId, 7001), opened.session.connection_id);
+    try std.testing.expect(opened.used_relay_fallback);
+    try std.testing.expectEqual(@as(usize, 1), fake.relay_attempts);
 }
