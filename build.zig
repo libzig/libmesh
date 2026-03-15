@@ -4,10 +4,15 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const libself_dep = b.dependency("libself", .{
+        .target = target,
+        .optimize = optimize,
+    });
     const libfast_dep = b.dependency("libfast", .{
         .target = target,
         .optimize = optimize,
     });
+    const libself_module = libself_dep.module("libself");
     const libfast_module = libfast_dep.module("libfast");
 
     // Core library module
@@ -16,6 +21,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    libmesh_module.addImport("libself", libself_module);
     libmesh_module.addImport("libfast", libfast_module);
 
     // Export module for downstream users.
@@ -24,6 +30,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    libmesh_export.addImport("libself", libself_module);
     libmesh_export.addImport("libfast", libfast_module);
 
     // Build static library artifact: libmesh.a

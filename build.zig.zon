@@ -2,9 +2,11 @@
     .name = .libmesh,
     .version = "0.0.1",
     .dependencies = .{
+        .libself = .{
+            .path = "../libself",
+        },
         .libfast = .{
-            .url = "git+https://github.com/bresilla/libfast?ref=0.0.15",
-            .hash = "libfast-0.0.15-BoxUpZqTDAD9cdL3PqlSZWch7PFsn0HgAaK_q3_Xxhgw",
+            .path = "../libfast",
         },
     },
     .paths = .{

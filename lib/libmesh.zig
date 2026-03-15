@@ -1,0 +1,27 @@
+const libself = @import("libself");
+const libfast = @import("libfast");
+
+pub fn hello() []const u8 {
+    return "hello from libmesh";
+}
+
+pub const Foundation = struct {
+    pub const NodeId = libself.NodeId;
+    pub const KeyPair = libself.identity.KeyPair;
+    pub const DidKey = libself.DidKey;
+};
+
+test "libmesh foundation imports libself and libfast" {
+    const std = @import("std");
+    try std.testing.expectEqualStrings("hello from libmesh", hello());
+    try std.testing.expect(libfast.version.len > 0);
+
+    const key_pair = try Foundation.KeyPair.fromSeed([_]u8{0x11} ** 32);
+    const node_id = Foundation.NodeId.fromPublicKey(key_pair.public_key);
+    try std.testing.expect(node_id.toHex().len == 64);
+
+    const allocator = std.testing.allocator;
+    const did = try Foundation.DidKey.fromKeyPair(key_pair).encode(allocator);
+    defer allocator.free(did);
+    try std.testing.expect(std.mem.startsWith(u8, did, "did:key:"));
+}
