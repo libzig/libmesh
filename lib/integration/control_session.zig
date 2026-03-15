@@ -3,6 +3,8 @@ const MeshError = @import("../common/error.zig").MeshError;
 const ProtocolVersion = @import("../common/version.zig").ProtocolVersion;
 const Capabilities = @import("../common/caps.zig").Capabilities;
 
+pub const max_payload_len: usize = 8192;
+
 pub const Kind = enum {
     request,
     response,
@@ -36,6 +38,7 @@ pub const Negotiated = struct {
 
 pub fn encode(allocator: std.mem.Allocator, envelope: Envelope) MeshError![]u8 {
     if (envelope.correlation_id == 0) return MeshError.InvalidPeerRecord;
+    if (envelope.payload.len > max_payload_len) return MeshError.BufferTooSmall;
     if (std.mem.indexOfScalar(u8, envelope.payload, '|') != null) return MeshError.InvalidPeerRecord;
     return std.fmt.allocPrint(allocator, "{s}|{d}|{d}.{d}.{d}|{d}{d}{d}{d}|{s}", .{
         envelope.kind.asText(),
@@ -63,6 +66,7 @@ pub fn decode(raw: []const u8) MeshError!Envelope {
     const kind = Kind.fromText(kind_text) orelse return MeshError.InvalidPeerRecord;
     const correlation_id = std.fmt.parseInt(u64, corr_text, 10) catch return MeshError.InvalidPeerRecord;
     if (correlation_id == 0) return MeshError.InvalidPeerRecord;
+    if (payload.len > max_payload_len) return MeshError.BufferTooSmall;
 
     var semver = std.mem.splitScalar(u8, version_text, '.');
     const major_text = semver.next() orelse return MeshError.InvalidVersion;
@@ -190,4 +194,19 @@ test "control session encode rejects delimiter in payload" {
         .capabilities = .{ .discovery = true },
         .payload = "bad|payload",
     }));
+}
+
+test "control session enforces maximum payload length" {
+    var huge: [max_payload_len + 1]u8 = undefined;
+    @memset(&huge, 'x');
+    try std.testing.expectError(MeshError.BufferTooSmall, encode(std.testing.allocator, .{
+        .kind = .request,
+        .correlation_id = 78,
+        .version = .{ .major = 1, .minor = 0, .patch = 0 },
+        .capabilities = .{ .discovery = true },
+        .payload = &huge,
+    }));
+    const too_big = std.fmt.allocPrint(std.testing.allocator, "request|79|1.0.0|1000|{s}", .{&huge}) catch return error.OutOfMemory;
+    defer std.testing.allocator.free(too_big);
+    try std.testing.expectError(MeshError.BufferTooSmall, decode(too_big));
 }
