@@ -73,9 +73,10 @@ pub const SessionTransport = struct {
         const payload = try protocol.encode(allocator, message);
         defer allocator.free(payload);
         var validate_ctx: u8 = 0;
-        const response = try request_exchange.requestResponseValidated(
+        const response = try request_exchange.requestResponseValidatedFrom(
             allocator,
             self.client,
+            self.server_id,
             self.server_id,
             .{
                 .kind = .request,
@@ -268,4 +269,36 @@ test "signaling session transport roundTrip retries when first response is inval
         .correlation_id = 121,
         .payload = "",
     }, .{ .max_attempts = 3 });
+}
+
+test "signaling session transport roundTrip ignores spoofed responder packets" {
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    var exchange = Exchange.init(std.testing.allocator);
+    defer exchange.deinit();
+    var rendezvous = Rendezvous.init(std.testing.allocator);
+    defer rendezvous.deinit();
+
+    const transport = SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-signal",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-signal", .bus = &bus },
+        .exchange = &exchange,
+        .rendezvous = &rendezvous,
+    };
+    const spoof = @import("../integration/session_endpoint.zig").Endpoint{
+        .id = "mesh-spoof",
+        .bus = &bus,
+    };
+
+    try spoof.sendResponse(std.testing.allocator, "node-a", 122, .{ .signaling = true }, "spoof");
+    try transport.roundTrip(std.testing.allocator, .{
+        .kind = .connect_request,
+        .from_node = "node-a",
+        .to_node = "node-b",
+        .correlation_id = 122,
+        .payload = "",
+    }, .{ .max_attempts = 2 });
+    try std.testing.expectEqual(@as(usize, 1), bus.pendingCount());
 }
