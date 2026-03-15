@@ -41,6 +41,7 @@ pub const discovery = struct {
     pub const protocol = @import("discovery/protocol.zig");
     pub const publish = @import("discovery/publish.zig");
     pub const refresh = @import("discovery/refresh.zig");
+    pub const session_transport = @import("discovery/session_transport.zig");
     pub const service = @import("discovery/service.zig");
     pub const server = @import("discovery/server.zig");
     pub const store = @import("discovery/store.zig");
@@ -123,6 +124,7 @@ test "libmesh foundation imports libself and libfast" {
     _ = discovery.protocol;
     _ = discovery.publish;
     _ = discovery.refresh;
+    _ = discovery.session_transport;
     _ = discovery.service;
     _ = discovery.server;
     _ = discovery.store;

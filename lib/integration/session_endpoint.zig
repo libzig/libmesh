@@ -17,7 +17,12 @@ pub const Endpoint = struct {
     bus: *SessionBus,
 
     pub fn sendEnvelope(self: Endpoint, allocator: std.mem.Allocator, to: []const u8, env: control.Envelope) MeshError!void {
-        const encoded = try control.encode(allocator, env);
+        const payload_hex = std.fmt.allocPrint(allocator, "{x}", .{env.payload}) catch return MeshError.BufferTooSmall;
+        defer allocator.free(payload_hex);
+
+        var wrapped = env;
+        wrapped.payload = payload_hex;
+        const encoded = try control.encode(allocator, wrapped);
         defer allocator.free(encoded);
         try self.bus.send(self.id, to, encoded);
     }
@@ -30,7 +35,9 @@ pub const Endpoint = struct {
             allocator.free(packet.payload);
         }
         const decoded = try control.decode(packet.payload);
-        const payload_storage = allocator.dupe(u8, decoded.payload) catch return MeshError.BufferTooSmall;
+        if (decoded.payload.len % 2 != 0) return MeshError.InvalidPeerRecord;
+        const payload_storage = allocator.alloc(u8, decoded.payload.len / 2) catch return MeshError.BufferTooSmall;
+        _ = std.fmt.hexToBytes(payload_storage, decoded.payload) catch return MeshError.InvalidPeerRecord;
         var envelope = decoded;
         envelope.payload = payload_storage;
         return .{
