@@ -41,6 +41,9 @@ pub const Message = struct {
 pub fn encode(allocator: std.mem.Allocator, msg: Message) MeshError![]u8 {
     if (msg.correlation_id == 0) return MeshError.InvalidPeerRecord;
     if (msg.payload.len > max_payload_len) return MeshError.BufferTooSmall;
+    if (std.mem.indexOfScalar(u8, msg.from_node, '|') != null) return MeshError.InvalidPeerRecord;
+    if (std.mem.indexOfScalar(u8, msg.to_node, '|') != null) return MeshError.InvalidPeerRecord;
+    if (std.mem.indexOfScalar(u8, msg.payload, '|') != null) return MeshError.InvalidPeerRecord;
     return std.fmt.allocPrint(allocator, "{s}|{s}|{s}|{d}|{s}", .{
         msg.kind.asText(),
         msg.from_node,
@@ -93,4 +96,21 @@ test "signaling protocol encode/decode roundtrip" {
 test "signaling protocol rejects malformed message" {
     try std.testing.expectError(MeshError.InvalidPeerRecord, decode("bad"));
     try std.testing.expectError(MeshError.InvalidPeerRecord, decode("connect_request|a|b|0|x"));
+}
+
+test "signaling protocol encode rejects delimiter characters in fields" {
+    try std.testing.expectError(MeshError.InvalidPeerRecord, encode(std.testing.allocator, .{
+        .kind = .setup_payload,
+        .from_node = "node|a",
+        .to_node = "node-b",
+        .correlation_id = 1,
+        .payload = "x",
+    }));
+    try std.testing.expectError(MeshError.InvalidPeerRecord, encode(std.testing.allocator, .{
+        .kind = .setup_payload,
+        .from_node = "node-a",
+        .to_node = "node-b",
+        .correlation_id = 1,
+        .payload = "x|y",
+    }));
 }
