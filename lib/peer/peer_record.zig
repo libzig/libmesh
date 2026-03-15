@@ -188,6 +188,8 @@ pub fn parseWirePayload(allocator: std.mem.Allocator, raw: []const u8) MeshError
                 _ = std.fmt.hexToBytes(&sig, value) catch return MeshError.InvalidSignature;
                 signature = sig;
             }
+        } else {
+            return MeshError.InvalidPeerRecord;
         }
     }
 
@@ -560,4 +562,17 @@ test "PeerRecord validate rejects future publish timestamps" {
         .relay_hints = &relay_hints,
     };
     try std.testing.expectError(MeshError.InvalidPeerRecord, record.validate(24));
+}
+
+test "PeerRecord wire parser rejects unknown fields" {
+    const raw =
+        "node=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff;" ++
+        "did=;" ++
+        "published=10;" ++
+        "expires=20;" ++
+        "endpoints=198.51.100.9:4433:1;" ++
+        "relay_hints=relay-a@relay.example.net:7443:1;" ++
+        "extra=value;" ++
+        "sig=;";
+    try std.testing.expectError(MeshError.InvalidPeerRecord, parseWirePayload(std.testing.allocator, raw));
 }
