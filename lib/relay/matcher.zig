@@ -33,6 +33,9 @@ pub const Matcher = struct {
 
     pub fn register(self: *Matcher, session: RelaySession) MeshError!?Match {
         if (!session.authenticated) return MeshError.AccessDenied;
+        for (self.pending.items) |item| {
+            if (item.session_id == session.id) return MeshError.Duplicate;
+        }
 
         for (self.pending.items, 0..) |item, idx| {
             if (sameNode(item.source_node_id, session.target_node_id) and
@@ -111,4 +114,30 @@ test "matcher rejects unauthenticated sessions" {
         .authenticated = false,
     };
     try std.testing.expectError(MeshError.AccessDenied, matcher.register(bad));
+}
+
+test "matcher rejects duplicate session ids while pending" {
+    const source = try libself.identity.KeyPair.fromSeed([_]u8{0xc5} ** 32);
+    const target = try libself.identity.KeyPair.fromSeed([_]u8{0xc6} ** 32);
+    var matcher = Matcher.init(std.testing.allocator);
+    defer matcher.deinit();
+
+    const first = RelaySession{
+        .id = 222,
+        .source_node_id = libself.NodeId.fromPublicKey(source.public_key),
+        .target_node_id = libself.NodeId.fromPublicKey(target.public_key),
+        .source_did = "did:key:source",
+        .target_did = "did:key:target",
+        .authenticated = true,
+    };
+    try std.testing.expect((try matcher.register(first)) == null);
+    const dup = RelaySession{
+        .id = 222,
+        .source_node_id = first.source_node_id,
+        .target_node_id = first.target_node_id,
+        .source_did = first.source_did,
+        .target_did = first.target_did,
+        .authenticated = true,
+    };
+    try std.testing.expectError(MeshError.Duplicate, matcher.register(dup));
 }
