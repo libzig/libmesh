@@ -63,6 +63,7 @@ pub const integration = struct {
     pub const libdice_contract = @import("integration/libdice_contract.zig");
     pub const libfast = @import("integration/libfast.zig");
     pub const libself = @import("integration/libself.zig");
+    pub const node_orchestrator = @import("integration/node_orchestrator.zig");
     pub const retry = @import("integration/retry.zig");
     pub const session_bus = @import("integration/session_bus.zig");
     pub const session_endpoint = @import("integration/session_endpoint.zig");
@@ -147,6 +148,7 @@ test "libmesh foundation imports libself and libfast" {
     _ = integration.libself;
     _ = integration.control_session;
     _ = integration.libdice_contract;
+    _ = integration.node_orchestrator;
     _ = integration.retry;
     _ = integration.session_bus;
     _ = integration.session_endpoint;
