@@ -126,6 +126,7 @@ pub const SessionTransport = struct {
     fn validateRoundTripResponse(_: *anyopaque, response: control.Envelope) MeshError!void {
         const parsed = protocol.decode(response.payload) catch return MeshError.NotFound;
         if (parsed.kind != .accept and parsed.kind != .deny) return MeshError.NotFound;
+        if (parsed.session_id != response.correlation_id) return MeshError.NotFound;
     }
 };
 
@@ -287,4 +288,31 @@ test "relay session transport roundTrip ignores spoofed responder packets" {
     }, .{ .max_attempts = 2 }, true);
     try std.testing.expectEqual(protocol.MessageKind.accept, opened.kind);
     try std.testing.expectEqual(@as(usize, 1), bus.pendingCount());
+}
+
+test "relay session transport roundTrip retries when payload session id mismatches correlation" {
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    const transport = SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-relay",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-relay", .bus = &bus },
+    };
+
+    const mismatched = try protocol.encode(std.testing.allocator, .{
+        .kind = .accept,
+        .session_id = 9999,
+        .payload = "open-ok",
+    });
+    defer std.testing.allocator.free(mismatched);
+    try transport.server.sendResponse(std.testing.allocator, "node-a", 914, .{ .relay_stream = true }, mismatched);
+
+    const recovered = try transport.roundTrip(std.testing.allocator, .{
+        .kind = .open,
+        .session_id = 914,
+        .payload = "node-b",
+    }, .{ .max_attempts = 3 }, true);
+    try std.testing.expectEqual(protocol.MessageKind.accept, recovered.kind);
+    try std.testing.expectEqual(@as(u64, 914), recovered.session_id);
 }
