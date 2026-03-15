@@ -58,6 +58,7 @@ pub fn decode(raw: []const u8) MeshError!Message {
     const kind = MessageKind.fromText(kind_text) orelse return MeshError.InvalidPeerRecord;
     const correlation_id = std.fmt.parseInt(u64, correlation_text, 10) catch return MeshError.InvalidPeerRecord;
     if (correlation_id == 0) return MeshError.InvalidPeerRecord;
+    if (!isCanonicalNodeHex(node_hex)) return MeshError.InvalidPeerRecord;
 
     return .{
         .kind = kind,
@@ -67,12 +68,22 @@ pub fn decode(raw: []const u8) MeshError!Message {
     };
 }
 
+fn isCanonicalNodeHex(node_hex: []const u8) bool {
+    if (node_hex.len != 64) return false;
+    for (node_hex) |c| {
+        const is_digit = c >= '0' and c <= '9';
+        const is_lower_hex = c >= 'a' and c <= 'f';
+        if (!is_digit and !is_lower_hex) return false;
+    }
+    return true;
+}
+
 test "discovery protocol encodes and decodes publish message" {
     const allocator = std.testing.allocator;
     const encoded = try encode(allocator, .{
         .kind = .publish,
         .correlation_id = 42,
-        .node_hex = "abcd",
+        .node_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         .payload = "peer-record",
     });
     defer allocator.free(encoded);
@@ -85,7 +96,9 @@ test "discovery protocol encodes and decodes publish message" {
 
 test "discovery protocol rejects malformed data" {
     try std.testing.expectError(MeshError.InvalidPeerRecord, decode("bad"));
-    try std.testing.expectError(MeshError.InvalidPeerRecord, decode("lookup|0|abcd|x"));
+    try std.testing.expectError(MeshError.InvalidPeerRecord, decode("lookup|0|0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef|x"));
+    try std.testing.expectError(MeshError.InvalidPeerRecord, decode("lookup|1|abcd|x"));
+    try std.testing.expectError(MeshError.InvalidPeerRecord, decode("lookup|1|0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF|x"));
 }
 
 test "discovery protocol encode rejects delimiter in node or payload fields" {
