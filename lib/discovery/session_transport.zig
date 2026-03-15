@@ -114,9 +114,10 @@ pub const SessionTransport = struct {
         policy: retry.Policy,
     ) MeshError![]u8 {
         var validate_ctx = RoundTripValidate{ .expect_kind = .response };
-        const response = try request_exchange.requestResponseValidated(
+        const response = try request_exchange.requestResponseValidatedFrom(
             allocator,
             self.client,
+            self.server_id,
             self.server_id,
             .{
                 .kind = .request,
@@ -442,4 +443,49 @@ test "discovery session transport roundtrip retries on invalid first response" {
     var parsed = try transport.lookupRoundTrip(std.testing.allocator, 51, record.node_id, .{ .max_attempts = 3 });
     defer parsed.deinit();
     try std.testing.expect(try parsed.record.verify(std.testing.allocator, kp.public_key));
+}
+
+test "discovery session transport roundtrip ignores spoofed responder packets" {
+    const libself = @import("libself");
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    var store = @import("store.zig").InMemoryStore.init(std.testing.allocator);
+    defer store.deinit();
+    const transport = SessionTransport{
+        .client_id = "node-client",
+        .server_id = "node-server",
+        .client = .{ .id = "node-client", .bus = &bus },
+        .server = .{ .id = "node-server", .bus = &bus },
+        .handler = .{ .store = &store },
+    };
+    const spoof = @import("../integration/session_endpoint.zig").Endpoint{
+        .id = "node-spoof",
+        .bus = &bus,
+    };
+
+    const kp = try libself.identity.KeyPair.fromSeed([_]u8{0xe6} ** 32);
+    const did = try libself.DidKey.fromKeyPair(kp).encode(std.testing.allocator);
+    defer std.testing.allocator.free(did);
+    const endpoints = [_]@import("../peer/endpoint.zig").PublishedEndpoint{
+        .{ .host = "198.51.100.215", .port = 4433 },
+    };
+    const hints = [_]@import("../peer/relay_hint.zig").RelayHint{
+        .{ .relay_id = "relay-round-spoof", .relay_address = "relay.example.net:9443" },
+    };
+    var record = peer_record.PeerRecord{
+        .node_id = libself.NodeId.fromPublicKey(kp.public_key),
+        .did = did,
+        .published_at_ms = 10,
+        .expires_at_ms = 100,
+        .endpoints = &endpoints,
+        .relay_hints = &hints,
+    };
+    try record.sign(std.testing.allocator, kp);
+    try transport.publishRoundTrip(std.testing.allocator, 60, record, .{ .max_attempts = 2 });
+
+    try spoof.sendResponse(std.testing.allocator, "node-client", 61, .{ .discovery = true }, "spoof");
+    var parsed = try transport.lookupRoundTrip(std.testing.allocator, 61, record.node_id, .{ .max_attempts = 2 });
+    defer parsed.deinit();
+    try std.testing.expect(try parsed.record.verify(std.testing.allocator, kp.public_key));
+    try std.testing.expectEqual(@as(usize, 1), bus.pendingCount());
 }
