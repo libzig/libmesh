@@ -26,6 +26,10 @@ pub const peer = struct {
     pub const route_candidate = @import("peer/route_candidate.zig");
 };
 
+pub const auth = struct {
+    pub const record_signer = @import("auth/record_signer.zig");
+};
+
 pub const discovery = struct {
     pub const store = @import("discovery/store.zig");
 };
@@ -67,6 +71,7 @@ test "libmesh foundation imports libself and libfast" {
     _ = peer.relay_hint;
     _ = peer.resolved_peer;
     _ = peer.route_candidate;
+    _ = auth.record_signer;
     _ = discovery.store;
     _ = signaling.protocol;
     _ = signaling.rendezvous;
