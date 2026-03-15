@@ -28,6 +28,10 @@ pub const discovery = struct {
     pub const store = @import("discovery/store.zig");
 };
 
+pub const signaling = struct {
+    pub const protocol = @import("signaling/protocol.zig");
+};
+
 test "libmesh foundation imports libself and libfast" {
     const std = @import("std");
     try std.testing.expectEqualStrings("hello from libmesh", hello());
@@ -50,4 +54,5 @@ test "libmesh foundation imports libself and libfast" {
     _ = peer.peer_record;
     _ = peer.relay_hint;
     _ = discovery.store;
+    _ = signaling.protocol;
 }
