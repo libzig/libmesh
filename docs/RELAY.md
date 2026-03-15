@@ -25,6 +25,14 @@ Kinds:
 - `datagram`
 - `close`
 
+Validation rules:
+
+- session id must be non-zero
+- delimiter (`|`) is not allowed in payload
+- `open` requires non-empty payload (target peer identity)
+- `close` requires empty payload
+- response payload `session_id` must match response correlation id in control envelope
+
 ## Components
 
 - `session.zig`: validates DID/public-key bindings and opens authenticated sessions

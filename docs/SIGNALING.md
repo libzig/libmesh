@@ -23,6 +23,12 @@ Kinds:
 - `candidate`
 - `setup_payload`
 
+Validation rules:
+
+- `from_node` and `to_node` must be non-empty and whitespace-free
+- delimiter (`|`) is not allowed in node identifiers or payload
+- correlation id must be non-zero
+
 ## Exchange And Rendezvous
 
 - `Exchange` is the in-memory message queue between peers

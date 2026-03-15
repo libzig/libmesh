@@ -49,3 +49,4 @@ Public orchestration helpers:
 
 - major protocol version mismatch in control session negotiation is rejected
 - negotiated capabilities are intersection of local/remote support
+- control payloads reject delimiter (`|`) and enforce a bounded max payload size
