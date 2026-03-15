@@ -137,6 +137,13 @@ pub fn parseWirePayload(allocator: std.mem.Allocator, raw: []const u8) MeshError
     var endpoints_text: []const u8 = "";
     var relay_hints_text: []const u8 = "";
     var signature: ?libself.identity.Signature = null;
+    var saw_node = false;
+    var saw_did = false;
+    var saw_published = false;
+    var saw_expires = false;
+    var saw_endpoints = false;
+    var saw_relay_hints = false;
+    var saw_sig = false;
 
     var sections = std.mem.splitScalar(u8, raw, ';');
     while (sections.next()) |section| {
@@ -146,18 +153,32 @@ pub fn parseWirePayload(allocator: std.mem.Allocator, raw: []const u8) MeshError
         const value = section[eq_idx + 1 ..];
 
         if (std.mem.eql(u8, key, "node")) {
+            if (saw_node) return MeshError.InvalidPeerRecord;
+            saw_node = true;
             node_hex = a.dupe(u8, value) catch return MeshError.BufferTooSmall;
         } else if (std.mem.eql(u8, key, "did")) {
+            if (saw_did) return MeshError.InvalidPeerRecord;
+            saw_did = true;
             if (value.len != 0) did = a.dupe(u8, value) catch return MeshError.BufferTooSmall;
         } else if (std.mem.eql(u8, key, "published")) {
+            if (saw_published) return MeshError.InvalidPeerRecord;
+            saw_published = true;
             published_at_ms = std.fmt.parseInt(mesh_time.TimestampMs, value, 10) catch return MeshError.InvalidPeerRecord;
         } else if (std.mem.eql(u8, key, "expires")) {
+            if (saw_expires) return MeshError.InvalidPeerRecord;
+            saw_expires = true;
             expires_at_ms = std.fmt.parseInt(mesh_time.TimestampMs, value, 10) catch return MeshError.InvalidPeerRecord;
         } else if (std.mem.eql(u8, key, "endpoints")) {
+            if (saw_endpoints) return MeshError.InvalidPeerRecord;
+            saw_endpoints = true;
             endpoints_text = a.dupe(u8, value) catch return MeshError.BufferTooSmall;
         } else if (std.mem.eql(u8, key, "relay_hints")) {
+            if (saw_relay_hints) return MeshError.InvalidPeerRecord;
+            saw_relay_hints = true;
             relay_hints_text = a.dupe(u8, value) catch return MeshError.BufferTooSmall;
         } else if (std.mem.eql(u8, key, "sig")) {
+            if (saw_sig) return MeshError.InvalidPeerRecord;
+            saw_sig = true;
             if (value.len == 0) {
                 signature = null;
             } else {
@@ -494,4 +515,30 @@ test "PeerRecord validate rejects did:key values that map to a different node id
         .relay_hints = &relay_hints,
     };
     try std.testing.expectError(MeshError.InvalidPeerRecord, record.validate(11));
+}
+
+test "PeerRecord wire parser rejects duplicate node fields" {
+    const raw =
+        "node=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff;" ++
+        "node=ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100;" ++
+        "did=;" ++
+        "published=10;" ++
+        "expires=20;" ++
+        "endpoints=198.51.100.9:4433:1;" ++
+        "relay_hints=relay-a@relay.example.net:7443:1;" ++
+        "sig=;";
+    try std.testing.expectError(MeshError.InvalidPeerRecord, parseWirePayload(std.testing.allocator, raw));
+}
+
+test "PeerRecord wire parser rejects duplicate signature fields" {
+    const raw =
+        "node=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff;" ++
+        "did=;" ++
+        "published=10;" ++
+        "expires=20;" ++
+        "endpoints=198.51.100.9:4433:1;" ++
+        "relay_hints=relay-a@relay.example.net:7443:1;" ++
+        "sig=;" ++
+        "sig=;";
+    try std.testing.expectError(MeshError.InvalidPeerRecord, parseWirePayload(std.testing.allocator, raw));
 }
