@@ -36,6 +36,18 @@ pub const PeerRecord = struct {
                 return a.priority > b.priority;
             }
         }.lessThan);
+        const sorted_relay_hints = try allocator.alloc(RelayHint, self.relay_hints.len);
+        defer allocator.free(sorted_relay_hints);
+        @memcpy(sorted_relay_hints, self.relay_hints);
+        std.mem.sort(RelayHint, sorted_relay_hints, {}, struct {
+            fn lessThan(_: void, a: RelayHint, b: RelayHint) bool {
+                const id_order = std.mem.order(u8, a.relay_id, b.relay_id);
+                if (id_order != .eq) return id_order == .lt;
+                const addr_order = std.mem.order(u8, a.relay_address, b.relay_address);
+                if (addr_order != .eq) return addr_order == .lt;
+                return a.priority > b.priority;
+            }
+        }.lessThan);
 
         const node_hex = self.node_id.toHex();
         try writer.print("node={s};", .{node_hex});
@@ -52,7 +64,7 @@ pub const PeerRecord = struct {
             try writer.print("{s}:{d}:{d}", .{ endpoint.host, endpoint.port, endpoint.priority });
         }
         try writer.writeAll(";relay_hints=");
-        for (self.relay_hints, 0..) |hint, idx| {
+        for (sorted_relay_hints, 0..) |hint, idx| {
             if (idx != 0) try writer.writeByte(',');
             try writer.print("{s}@{s}:{d}", .{ hint.relay_id, hint.relay_address, hint.priority });
         }
@@ -282,6 +294,43 @@ test "PeerRecord canonical payload normalizes endpoint ordering" {
         .expires_at_ms = 10,
         .endpoints = &reversed,
         .relay_hints = &relay_hints,
+    };
+
+    const payload_a = try a.canonicalPayloadAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(payload_a);
+    const payload_b = try b.canonicalPayloadAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(payload_b);
+    try std.testing.expectEqualStrings(payload_a, payload_b);
+}
+
+test "PeerRecord canonical payload normalizes relay hint ordering" {
+    const key_pair = try libself.identity.KeyPair.fromSeed([_]u8{0x2b} ** 32);
+    const node_id = libself.NodeId.fromPublicKey(key_pair.public_key);
+    const endpoints = [_]PublishedEndpoint{
+        .{ .host = "198.51.100.30", .port = 4433, .priority = 1 },
+    };
+    const ordered = [_]RelayHint{
+        .{ .relay_id = "relay-a", .relay_address = "relay-a.example.net:7443", .priority = 5 },
+        .{ .relay_id = "relay-z", .relay_address = "relay-z.example.net:8443", .priority = 1 },
+    };
+    const reversed = [_]RelayHint{
+        .{ .relay_id = "relay-z", .relay_address = "relay-z.example.net:8443", .priority = 1 },
+        .{ .relay_id = "relay-a", .relay_address = "relay-a.example.net:7443", .priority = 5 },
+    };
+
+    const a = PeerRecord{
+        .node_id = node_id,
+        .published_at_ms = 1,
+        .expires_at_ms = 10,
+        .endpoints = &endpoints,
+        .relay_hints = &ordered,
+    };
+    const b = PeerRecord{
+        .node_id = node_id,
+        .published_at_ms = 1,
+        .expires_at_ms = 10,
+        .endpoints = &endpoints,
+        .relay_hints = &reversed,
     };
 
     const payload_a = try a.canonicalPayloadAlloc(std.testing.allocator);
