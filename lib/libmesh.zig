@@ -44,6 +44,7 @@ pub const discovery = struct {
 };
 
 pub const signaling = struct {
+    pub const exchange = @import("signaling/exchange.zig");
     pub const protocol = @import("signaling/protocol.zig");
     pub const rendezvous = @import("signaling/rendezvous.zig");
 };
@@ -91,6 +92,7 @@ test "libmesh foundation imports libself and libfast" {
     _ = discovery.server;
     _ = discovery.store;
     _ = discovery.withdraw;
+    _ = signaling.exchange;
     _ = signaling.protocol;
     _ = signaling.rendezvous;
     _ = integration.libfast;
