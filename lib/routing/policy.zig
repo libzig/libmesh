@@ -87,3 +87,27 @@ test "routing policy returns none when no route exists" {
     const peer = fixturePeer(false, false);
     try std.testing.expectEqual(Decision.none, policy.decide(peer, .{}));
 }
+
+test "routing policy falls back to relay when traversal is needed but libdice is unavailable" {
+    const policy = Policy{};
+    const peer = fixturePeer(true, true);
+    try std.testing.expectEqual(
+        Decision.relay,
+        policy.decide(peer, .{
+            .needs_traversal = true,
+            .dice_available = false,
+        }),
+    );
+}
+
+test "routing policy returns none when traversal is needed, libdice is unavailable, and no relay exists" {
+    const policy = Policy{};
+    const peer = fixturePeer(true, false);
+    try std.testing.expectEqual(
+        Decision.none,
+        policy.decide(peer, .{
+            .needs_traversal = true,
+            .dice_available = false,
+        }),
+    );
+}
