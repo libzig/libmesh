@@ -56,6 +56,7 @@ pub const signaling = struct {
 };
 
 pub const integration = struct {
+    pub const control_session = @import("integration/control_session.zig");
     pub const libfast = @import("integration/libfast.zig");
     pub const libself = @import("integration/libself.zig");
 };
@@ -123,6 +124,7 @@ test "libmesh foundation imports libself and libfast" {
     _ = relay.client;
     _ = integration.libfast;
     _ = integration.libself;
+    _ = integration.control_session;
     _ = routing.orchestrator;
     _ = routing.policy;
     _ = relay.bridge_streams;
