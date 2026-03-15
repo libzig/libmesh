@@ -25,6 +25,17 @@ pub const PeerRecord = struct {
         var list = std.ArrayList(u8).empty;
         defer list.deinit(allocator);
         const writer = list.writer(allocator);
+        const sorted_endpoints = try allocator.alloc(PublishedEndpoint, self.endpoints.len);
+        defer allocator.free(sorted_endpoints);
+        @memcpy(sorted_endpoints, self.endpoints);
+        std.mem.sort(PublishedEndpoint, sorted_endpoints, {}, struct {
+            fn lessThan(_: void, a: PublishedEndpoint, b: PublishedEndpoint) bool {
+                const host_order = std.mem.order(u8, a.host, b.host);
+                if (host_order != .eq) return host_order == .lt;
+                if (a.port != b.port) return a.port < b.port;
+                return a.priority > b.priority;
+            }
+        }.lessThan);
 
         const node_hex = self.node_id.toHex();
         try writer.print("node={s};", .{node_hex});
@@ -36,7 +47,7 @@ pub const PeerRecord = struct {
         try writer.print("published={d};expires={d};", .{ self.published_at_ms, self.expires_at_ms });
 
         try writer.writeAll("endpoints=");
-        for (self.endpoints, 0..) |endpoint, idx| {
+        for (sorted_endpoints, 0..) |endpoint, idx| {
             if (idx != 0) try writer.writeByte(',');
             try writer.print("{s}:{d}:{d}", .{ endpoint.host, endpoint.port, endpoint.priority });
         }
@@ -239,6 +250,44 @@ test "PeerRecord canonical payload is deterministic for equivalent records" {
     const payload_b = try b.canonicalPayloadAlloc(allocator);
     defer allocator.free(payload_b);
 
+    try std.testing.expectEqualStrings(payload_a, payload_b);
+}
+
+test "PeerRecord canonical payload normalizes endpoint ordering" {
+    const key_pair = try libself.identity.KeyPair.fromSeed([_]u8{0x2a} ** 32);
+    const node_id = libself.NodeId.fromPublicKey(key_pair.public_key);
+    const relay_hints = [_]RelayHint{
+        .{ .relay_id = "relay-same", .relay_address = "relay.example.net:4433", .priority = 1 },
+    };
+
+    const ordered = [_]PublishedEndpoint{
+        .{ .host = "198.51.100.10", .port = 4433, .priority = 1 },
+        .{ .host = "198.51.100.20", .port = 4433, .priority = 5 },
+    };
+    const reversed = [_]PublishedEndpoint{
+        .{ .host = "198.51.100.20", .port = 4433, .priority = 5 },
+        .{ .host = "198.51.100.10", .port = 4433, .priority = 1 },
+    };
+
+    const a = PeerRecord{
+        .node_id = node_id,
+        .published_at_ms = 1,
+        .expires_at_ms = 10,
+        .endpoints = &ordered,
+        .relay_hints = &relay_hints,
+    };
+    const b = PeerRecord{
+        .node_id = node_id,
+        .published_at_ms = 1,
+        .expires_at_ms = 10,
+        .endpoints = &reversed,
+        .relay_hints = &relay_hints,
+    };
+
+    const payload_a = try a.canonicalPayloadAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(payload_a);
+    const payload_b = try b.canonicalPayloadAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(payload_b);
     try std.testing.expectEqualStrings(payload_a, payload_b);
 }
 
