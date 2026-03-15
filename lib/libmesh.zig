@@ -62,6 +62,7 @@ pub const integration = struct {
     pub const libfast = @import("integration/libfast.zig");
     pub const libself = @import("integration/libself.zig");
     pub const retry = @import("integration/retry.zig");
+    pub const session_bus = @import("integration/session_bus.zig");
 };
 
 pub const routing = struct {
@@ -138,6 +139,7 @@ test "libmesh foundation imports libself and libfast" {
     _ = integration.control_session;
     _ = integration.libdice_contract;
     _ = integration.retry;
+    _ = integration.session_bus;
     _ = routing.orchestrator;
     _ = routing.policy;
     _ = relay.bridge_streams;
