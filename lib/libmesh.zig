@@ -82,6 +82,7 @@ pub const relay = struct {
 
 pub const scenario = struct {
     pub const direct_case = @import("scenario/direct_case.zig");
+    pub const signaling_dice_case = @import("scenario/signaling_dice_case.zig");
 };
 
 test "libmesh foundation imports libself and libfast" {
@@ -143,4 +144,5 @@ test "libmesh foundation imports libself and libfast" {
     _ = relay.server;
     _ = relay.session;
     _ = scenario.direct_case;
+    _ = scenario.signaling_dice_case;
 }
