@@ -113,8 +113,9 @@ pub fn resolveTargets(allocator: std.mem.Allocator, peer: ResolvedPeer) MeshErro
             .relay => {
                 if (relay.len == 0) continue;
                 const idx = @min(relay_idx, relay.len - 1);
-                selected.append(allocator, try relayHintToTarget(relay[idx])) catch return MeshError.BufferTooSmall;
                 if (relay_idx < relay.len) relay_idx += 1;
+                const target = relayHintToTarget(relay[idx]) catch continue;
+                selected.append(allocator, target) catch return MeshError.BufferTooSmall;
             },
         }
     }
@@ -318,6 +319,43 @@ test "resolveTargets skips invalid direct endpoint hints when another direct hin
     try std.testing.expectEqual(@as(usize, 1), targets.len);
     switch (targets[0]) {
         .direct => |direct| try std.testing.expectEqualStrings("198.51.100.75", direct.host),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "resolveTargets skips invalid relay hints when another relay hint is usable" {
+    const key_pair = try @import("libself").identity.KeyPair.fromSeed([_]u8{0x75} ** 32);
+    const endpoints = [_]PublishedEndpoint{};
+    const hints = [_]RelayHint{
+        .{ .relay_id = "relay-bad", .relay_address = "2001:db8::99:9443", .priority = 10 },
+        .{ .relay_id = "relay-good", .relay_address = "relay.example.net:7443", .priority = 1 },
+    };
+    const record = @import("../peer/peer_record.zig").PeerRecord{
+        .node_id = @import("libself").NodeId.fromPublicKey(key_pair.public_key),
+        .published_at_ms = 1,
+        .expires_at_ms = 100,
+        .endpoints = &endpoints,
+        .relay_hints = &hints,
+    };
+    const direct_routes = [_]@import("../peer/route_candidate.zig").RouteCandidate{};
+    const relay_routes = [_]@import("../peer/route_candidate.zig").RouteCandidate{
+        .{ .kind = .relay, .priority = 10 },
+        .{ .kind = .relay, .priority = 5 },
+    };
+    const resolved = ResolvedPeer{
+        .record = record,
+        .direct_routes = &direct_routes,
+        .relay_routes = &relay_routes,
+    };
+
+    const targets = try resolveTargets(std.testing.allocator, resolved);
+    defer std.testing.allocator.free(targets);
+    try std.testing.expectEqual(@as(usize, 1), targets.len);
+    switch (targets[0]) {
+        .relay => |relay| {
+            try std.testing.expectEqualStrings("relay.example.net", relay.host);
+            try std.testing.expectEqual(@as(u16, 7443), relay.port);
+        },
         else => return error.TestUnexpectedResult,
     }
 }
