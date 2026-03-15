@@ -82,9 +82,21 @@ pub fn build(b: *std.Build) void {
     });
     const run_example_relay_tests = b.addRunArtifact(example_relay_tests);
 
+    const example_orchestrator_module = b.createModule(.{
+        .root_source_file = b.path("examples/orchestrator/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    example_orchestrator_module.addImport("libmesh", libmesh_export);
+    const example_orchestrator_tests = b.addTest(.{
+        .root_module = example_orchestrator_module,
+    });
+    const run_example_orchestrator_tests = b.addRunArtifact(example_orchestrator_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_example_publish_tests.step);
     test_step.dependOn(&run_example_signal_tests.step);
     test_step.dependOn(&run_example_relay_tests.step);
+    test_step.dependOn(&run_example_orchestrator_tests.step);
 }
