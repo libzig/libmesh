@@ -2,6 +2,8 @@ const std = @import("std");
 const MeshError = @import("../common/error.zig").MeshError;
 const guard = @import("../integration/negotiation_guard.zig");
 const Endpoint = @import("../integration/session_endpoint.zig").Endpoint;
+const request_exchange = @import("../integration/request_exchange.zig");
+const retry = @import("../integration/retry.zig");
 const protocol = @import("protocol.zig");
 const Exchange = @import("exchange.zig").Exchange;
 const Rendezvous = @import("rendezvous.zig").Rendezvous;
@@ -58,6 +60,33 @@ pub const SessionTransport = struct {
 
     pub fn recvAck(self: SessionTransport, allocator: std.mem.Allocator, correlation_id: u64) MeshError!void {
         const response = try self.client.expectResponse(allocator, correlation_id);
+        defer response.deinit(allocator);
+        if (!std.mem.eql(u8, response.envelope.payload, "ok")) return MeshError.InvalidPeerRecord;
+    }
+
+    fn pumpAdapter(ctx_ptr: *anyopaque, allocator: std.mem.Allocator) MeshError!bool {
+        const self: *const SessionTransport = @ptrCast(@alignCast(ctx_ptr));
+        return self.pumpServer(allocator);
+    }
+
+    pub fn roundTrip(self: SessionTransport, allocator: std.mem.Allocator, message: protocol.Message, policy: retry.Policy) MeshError!void {
+        const payload = try protocol.encode(allocator, message);
+        defer allocator.free(payload);
+        const response = try request_exchange.requestResponse(
+            allocator,
+            self.client,
+            self.server_id,
+            .{
+                .kind = .request,
+                .correlation_id = message.correlation_id,
+                .version = .{ .major = 1, .minor = 0, .patch = 0 },
+                .capabilities = .{ .signaling = true },
+                .payload = payload,
+            },
+            policy,
+            @constCast(&self),
+            pumpAdapter,
+        );
         defer response.deinit(allocator);
         if (!std.mem.eql(u8, response.envelope.payload, "ok")) return MeshError.InvalidPeerRecord;
     }
@@ -171,4 +200,39 @@ test "signaling session transport rejects missing signaling capability" {
         .payload = payload,
     });
     try std.testing.expectError(MeshError.AccessDenied, transport.pumpServer(std.testing.allocator));
+}
+
+test "signaling session transport roundTrip helper drives rendezvous state" {
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    var exchange = Exchange.init(std.testing.allocator);
+    defer exchange.deinit();
+    var rendezvous = Rendezvous.init(std.testing.allocator);
+    defer rendezvous.deinit();
+
+    const transport = SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-signal",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-signal", .bus = &bus },
+        .exchange = &exchange,
+        .rendezvous = &rendezvous,
+    };
+    try transport.roundTrip(std.testing.allocator, .{
+        .kind = .connect_request,
+        .from_node = "node-a",
+        .to_node = "node-b",
+        .correlation_id = 120,
+        .payload = "",
+    }, .{ .max_attempts = 2 });
+    try std.testing.expect(!rendezvous.isAccepted(120));
+
+    try transport.roundTrip(std.testing.allocator, .{
+        .kind = .connect_accept,
+        .from_node = "node-b",
+        .to_node = "node-a",
+        .correlation_id = 120,
+        .payload = "",
+    }, .{ .max_attempts = 2 });
+    try std.testing.expect(rendezvous.isAccepted(120));
 }
