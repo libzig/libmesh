@@ -24,12 +24,26 @@
 
 `libmesh` does not call `libdice` directly.
 
-Expected external orchestration:
+Expected external orchestration contract:
 
-1. `libmesh` lookup + signaling
-2. external call to `libdice` for direct traversal attempt
-3. run QUIC over winning route
-4. fallback to `libmesh` relay route if direct path fails
+1. `libmesh` resolves peer metadata and route candidates.
+2. If traversal is needed, `libmesh` signaling carries setup payloads between peers.
+3. Higher-level node/orchestrator invokes `libdice` externally.
+4. `libfast` runs QUIC on the selected direct path.
+5. If direct cannot be established, `libmesh` relay fallback is used.
+
+Decision mapping used in `libmesh.integration.libdice_contract`:
+
+- `direct`: no signaling, no `libdice`, no forced relay.
+- `signaling_then_direct`: signaling enabled, external `libdice` expected, relay fallback allowed.
+- `relay`: no signaling, no `libdice`, relay required.
+
+Public orchestration helpers:
+
+- `libmesh.integration.node_orchestrator.connect(...)`
+- `libmesh.integration.node_orchestrator.connectAndOpenSession(...)`
+- `libmesh.connectPeerViaDriver(...)`
+- `libmesh.connectPeerViaDriverDefault(...)`
 
 ## Compatibility Rules
 
