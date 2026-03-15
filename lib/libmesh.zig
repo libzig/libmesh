@@ -58,6 +58,10 @@ pub const integration = struct {
     pub const libself = @import("integration/libself.zig");
 };
 
+pub const routing = struct {
+    pub const policy = @import("routing/policy.zig");
+};
+
 pub const relay = struct {
     pub const bridge_datagrams = @import("relay/bridge_datagrams.zig");
     pub const bridge_streams = @import("relay/bridge_streams.zig");
@@ -115,6 +119,7 @@ test "libmesh foundation imports libself and libfast" {
     _ = relay.client;
     _ = integration.libfast;
     _ = integration.libself;
+    _ = routing.policy;
     _ = relay.bridge_streams;
     _ = relay.matcher;
     _ = relay.policy;
