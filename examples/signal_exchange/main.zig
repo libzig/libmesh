@@ -41,3 +41,22 @@ test "signal_exchange example flow drives connect and payload exchange" {
     try std.testing.expectEqual(libmesh.signaling.protocol.MessageKind.connect_accept, ack.kind);
     try std.testing.expect(rendezvous.isAccepted(9));
 }
+
+test "signal_exchange example covers reject flow and request teardown" {
+    var exchange = libmesh.signaling.exchange.Exchange.init(std.testing.allocator);
+    defer exchange.deinit();
+    var rendezvous = libmesh.signaling.rendezvous.Rendezvous.init(std.testing.allocator);
+    defer rendezvous.deinit();
+
+    const service = libmesh.signaling.service.Service{
+        .exchange = &exchange,
+        .rendezvous = &rendezvous,
+    };
+
+    try service.requestConnect("node-a", "node-b", 10);
+    _ = try service.processNext("node-b");
+    try service.rejectConnect("node-b", "node-a", 10, "busy");
+    const reject = (try service.processNext("node-a")).?;
+    try std.testing.expectEqual(libmesh.signaling.protocol.MessageKind.connect_reject, reject.kind);
+    try std.testing.expect(!rendezvous.isAccepted(10));
+}
