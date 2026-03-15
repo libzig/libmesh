@@ -72,7 +72,8 @@ pub const SessionTransport = struct {
     pub fn roundTrip(self: SessionTransport, allocator: std.mem.Allocator, message: protocol.Message, policy: retry.Policy) MeshError!void {
         const payload = try protocol.encode(allocator, message);
         defer allocator.free(payload);
-        const response = try request_exchange.requestResponse(
+        var validate_ctx: u8 = 0;
+        const response = try request_exchange.requestResponseValidated(
             allocator,
             self.client,
             self.server_id,
@@ -86,9 +87,14 @@ pub const SessionTransport = struct {
             policy,
             @constCast(&self),
             pumpAdapter,
+            &validate_ctx,
+            validateRoundTripResponse,
         );
         defer response.deinit(allocator);
-        if (!std.mem.eql(u8, response.envelope.payload, "ok")) return MeshError.InvalidPeerRecord;
+    }
+
+    fn validateRoundTripResponse(_: *anyopaque, response: @import("../integration/control_session.zig").Envelope) MeshError!void {
+        if (!std.mem.eql(u8, response.payload, "ok")) return MeshError.NotFound;
     }
 };
 
@@ -235,4 +241,31 @@ test "signaling session transport roundTrip helper drives rendezvous state" {
         .payload = "",
     }, .{ .max_attempts = 2 });
     try std.testing.expect(rendezvous.isAccepted(120));
+}
+
+test "signaling session transport roundTrip retries when first response is invalid" {
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    var exchange = Exchange.init(std.testing.allocator);
+    defer exchange.deinit();
+    var rendezvous = Rendezvous.init(std.testing.allocator);
+    defer rendezvous.deinit();
+
+    const transport = SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-signal",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-signal", .bus = &bus },
+        .exchange = &exchange,
+        .rendezvous = &rendezvous,
+    };
+
+    try transport.server.sendResponse(std.testing.allocator, "node-a", 121, .{ .signaling = true }, "bad");
+    try transport.roundTrip(std.testing.allocator, .{
+        .kind = .connect_request,
+        .from_node = "node-a",
+        .to_node = "node-b",
+        .correlation_id = 121,
+        .payload = "",
+    }, .{ .max_attempts = 3 });
 }

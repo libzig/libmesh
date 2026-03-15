@@ -17,7 +17,9 @@ pub const Server = struct {
         }
 
         switch (env.message.kind) {
-            .connect_request => try self.rendezvous.request(env.from_node, env.to_node, env.message.correlation_id),
+            .connect_request => self.rendezvous.request(env.from_node, env.to_node, env.message.correlation_id) catch |err| {
+                if (err != MeshError.Duplicate) return err;
+            },
             .connect_accept => try self.rendezvous.accept(env.message.correlation_id),
             .connect_reject => try self.rendezvous.reject(env.message.correlation_id),
             else => {},
@@ -61,4 +63,27 @@ test "signaling server processes connect request and accept flow" {
     const msg_accept = (try server_a.processNext()).?;
     try std.testing.expectEqual(protocol.MessageKind.connect_accept, msg_accept.kind);
     try std.testing.expect(rendezvous.isAccepted(11));
+}
+
+test "signaling server treats duplicate connect request correlation as idempotent" {
+    var exchange = Exchange.init(std.testing.allocator);
+    defer exchange.deinit();
+    var rendezvous = Rendezvous.init(std.testing.allocator);
+    defer rendezvous.deinit();
+
+    const client_a = @import("client.zig").Client{
+        .exchange = &exchange,
+        .local_node = "node-a",
+    };
+    const server_b = Server{
+        .exchange = &exchange,
+        .rendezvous = &rendezvous,
+        .local_node = "node-b",
+    };
+
+    try client_a.sendConnectRequest("node-b", 21);
+    _ = try server_b.processNext();
+    try client_a.sendConnectRequest("node-b", 21);
+    _ = try server_b.processNext();
+    try std.testing.expect(!rendezvous.isAccepted(21));
 }
