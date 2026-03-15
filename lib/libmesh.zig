@@ -33,8 +33,12 @@ pub const auth = struct {
 };
 
 pub const discovery = struct {
+    pub const lookup = @import("discovery/lookup.zig");
     pub const protocol = @import("discovery/protocol.zig");
+    pub const publish = @import("discovery/publish.zig");
+    pub const refresh = @import("discovery/refresh.zig");
     pub const store = @import("discovery/store.zig");
+    pub const withdraw = @import("discovery/withdraw.zig");
 };
 
 pub const signaling = struct {
@@ -77,8 +81,12 @@ test "libmesh foundation imports libself and libfast" {
     _ = auth.record_signer;
     _ = auth.record_verifier;
     _ = auth.trust_bridge;
+    _ = discovery.lookup;
     _ = discovery.protocol;
+    _ = discovery.publish;
+    _ = discovery.refresh;
     _ = discovery.store;
+    _ = discovery.withdraw;
     _ = signaling.protocol;
     _ = signaling.rendezvous;
     _ = integration.libfast;
