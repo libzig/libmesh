@@ -20,6 +20,7 @@ pub const common = struct {
 
 pub const peer = struct {
     pub const endpoint = @import("peer/endpoint.zig");
+    pub const peer_record = @import("peer/peer_record.zig");
     pub const relay_hint = @import("peer/relay_hint.zig");
 };
 
@@ -42,5 +43,6 @@ test "libmesh foundation imports libself and libfast" {
     _ = common.version;
     _ = common.caps;
     _ = peer.endpoint;
+    _ = peer.peer_record;
     _ = peer.relay_hint;
 }
