@@ -1,6 +1,6 @@
 .{
     .name = .libmesh,
-    .version = "0.0.1",
+    .version = "0.0.2",
     .dependencies = .{
         .libself = .{
             .url = "git+https://github.com/libzig/libself#0.0.2",
