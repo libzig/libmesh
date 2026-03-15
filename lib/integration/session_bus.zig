@@ -46,7 +46,7 @@ pub const SessionBus = struct {
     pub fn recv(self: *SessionBus, to: []const u8) ?Packet {
         for (self.queue.items, 0..) |packet, idx| {
             if (std.mem.eql(u8, packet.to, to)) {
-                return self.queue.swapRemove(idx);
+                return self.queue.orderedRemove(idx);
             }
         }
         return null;
@@ -55,7 +55,7 @@ pub const SessionBus = struct {
     pub fn recvFrom(self: *SessionBus, to: []const u8, from: []const u8) ?Packet {
         for (self.queue.items, 0..) |packet, idx| {
             if (std.mem.eql(u8, packet.to, to) and std.mem.eql(u8, packet.from, from)) {
-                return self.queue.swapRemove(idx);
+                return self.queue.orderedRemove(idx);
             }
         }
         return null;
@@ -114,4 +114,28 @@ test "SessionBus recvFrom selects packet by source and destination" {
     }
     try std.testing.expectEqualStrings("from-b", packet.payload);
     try std.testing.expectEqual(@as(usize, 1), bus.pendingCount());
+}
+
+test "SessionBus recv preserves FIFO order for same destination" {
+    var bus = SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+
+    try bus.send("node-a", "node-z", "first");
+    try bus.send("node-b", "node-z", "second");
+
+    const first = bus.recv("node-z").?;
+    defer {
+        std.testing.allocator.free(first.from);
+        std.testing.allocator.free(first.to);
+        std.testing.allocator.free(first.payload);
+    }
+    try std.testing.expectEqualStrings("first", first.payload);
+
+    const second = bus.recv("node-z").?;
+    defer {
+        std.testing.allocator.free(second.from);
+        std.testing.allocator.free(second.to);
+        std.testing.allocator.free(second.payload);
+    }
+    try std.testing.expectEqualStrings("second", second.payload);
 }
