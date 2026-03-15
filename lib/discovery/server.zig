@@ -1,6 +1,7 @@
 const std = @import("std");
 const libself = @import("libself");
 const MeshError = @import("../common/error.zig").MeshError;
+const mesh_time = @import("../common/time.zig");
 const protocol = @import("protocol.zig");
 const Store = @import("store.zig").InMemoryStore;
 const peer_record = @import("../peer/peer_record.zig");
@@ -17,6 +18,7 @@ pub const Server = struct {
                 var parsed = try peer_record.parseWirePayload(allocator, msg.payload);
                 defer parsed.deinit();
                 const signer_key = try signerKeyFromDid(allocator, parsed.record.did);
+                try requirePublishTimeWithinSkew(parsed.record.published_at_ms);
                 try self.store.publish(parsed.record, signer_key, parsed.record.published_at_ms);
                 break :blk protocol.encode(allocator, .{
                     .kind = .response,
@@ -46,6 +48,7 @@ pub const Server = struct {
                 var parsed = try peer_record.parseWirePayload(allocator, msg.payload);
                 defer parsed.deinit();
                 const signer_key = try signerKeyFromDid(allocator, parsed.record.did);
+                try requirePublishTimeWithinSkew(parsed.record.published_at_ms);
                 try self.store.refresh(parsed.record, signer_key, parsed.record.published_at_ms);
                 break :blk protocol.encode(allocator, .{
                     .kind = .response,
@@ -67,6 +70,13 @@ pub const Server = struct {
         };
     }
 };
+
+const max_future_publish_skew_ms: u64 = 5 * 60 * 1000;
+
+fn requirePublishTimeWithinSkew(published_at_ms: u64) MeshError!void {
+    const now = mesh_time.nowMs();
+    if (published_at_ms > now + max_future_publish_skew_ms) return MeshError.InvalidPeerRecord;
+}
 
 fn signerKeyFromDid(allocator: std.mem.Allocator, did: ?[]const u8) MeshError!libself.identity.PublicKey {
     const did_text = did orelse return MeshError.AccessDenied;
@@ -177,4 +187,34 @@ test "discovery server handles publish and refresh through signed wire payloads"
     defer parsed_lookup.deinit();
     try std.testing.expectEqual(@as(u64, 120), parsed_lookup.record.expires_at_ms);
     try std.testing.expect(try parsed_lookup.record.verify(std.testing.allocator, kp.public_key));
+}
+
+test "discovery server rejects publish records dated in the future" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+    const server = Server{ .store = &store };
+
+    const kp = try libself.identity.KeyPair.fromSeed([_]u8{0xd7} ** 32);
+    const did = try libself.DidKey.fromKeyPair(kp).encode(std.testing.allocator);
+    defer std.testing.allocator.free(did);
+    const endpoints = [_]@import("../peer/endpoint.zig").PublishedEndpoint{
+        .{ .host = "203.0.113.78", .port = 4433 },
+    };
+    const hints = [_]@import("../peer/relay_hint.zig").RelayHint{
+        .{ .relay_id = "relay-future", .relay_address = "relay.example.net:5443" },
+    };
+    const future_publish = mesh_time.nowMs() + max_future_publish_skew_ms + 60_000;
+    var record = @import("../peer/peer_record.zig").PeerRecord{
+        .node_id = libself.NodeId.fromPublicKey(kp.public_key),
+        .did = did,
+        .published_at_ms = future_publish,
+        .expires_at_ms = future_publish + 5_000,
+        .endpoints = &endpoints,
+        .relay_hints = &hints,
+    };
+    try record.sign(std.testing.allocator, kp);
+
+    const publish_msg = try @import("client.zig").buildPublish(std.testing.allocator, 15, record);
+    defer std.testing.allocator.free(publish_msg);
+    try std.testing.expectError(MeshError.InvalidPeerRecord, server.handle(std.testing.allocator, publish_msg));
 }
