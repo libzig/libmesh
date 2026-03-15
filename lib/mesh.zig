@@ -101,6 +101,14 @@ pub fn connectPeerViaDriver(
     return node_orchestrator.connectAndOpenSession(allocator, peer, runtime, driver);
 }
 
+pub fn connectPeerViaDriverDefault(
+    allocator: std.mem.Allocator,
+    peer: ResolvedPeer,
+    driver: libfast_adapter.Driver,
+) MeshError!node_orchestrator.OpenSessionResult {
+    return connectPeerViaDriver(allocator, peer, .{}, driver);
+}
+
 test "mesh API publishes and looks up signed peer records" {
     var store = store_mod.InMemoryStore.init(std.testing.allocator);
     defer store.deinit();
@@ -284,4 +292,68 @@ test "mesh API connectPeerViaDriver opens relay fallback route when direct dial 
     try std.testing.expectEqual(@as(libfast_adapter.ConnectionId, 7001), opened.session.connection_id);
     try std.testing.expect(opened.used_relay_fallback);
     try std.testing.expectEqual(@as(usize, 1), fake.relay_attempts);
+}
+
+test "mesh API connectPeerViaDriverDefault opens direct route when available" {
+    const kp = try libself.identity.KeyPair.fromSeed([_]u8{0x8d} ** 32);
+    const endpoints = [_]@import("peer/endpoint.zig").PublishedEndpoint{
+        .{ .host = "198.51.100.252", .port = 4433, .priority = 10 },
+    };
+    const hints = [_]@import("peer/relay_hint.zig").RelayHint{
+        .{ .relay_id = "relay-api-driver-direct", .relay_address = "relay.example.net:7443", .priority = 1 },
+    };
+    const direct_routes = [_]@import("peer/route_candidate.zig").RouteCandidate{
+        .{ .kind = .direct, .priority = 10 },
+    };
+    const relay_routes = [_]@import("peer/route_candidate.zig").RouteCandidate{
+        .{ .kind = .relay, .priority = 1 },
+    };
+    const resolved = ResolvedPeer{
+        .record = .{
+            .node_id = libself.NodeId.fromPublicKey(kp.public_key),
+            .published_at_ms = 10,
+            .expires_at_ms = 1000,
+            .endpoints = &endpoints,
+            .relay_hints = &hints,
+        },
+        .direct_routes = &direct_routes,
+        .relay_routes = &relay_routes,
+    };
+
+    const Fake = struct {
+        const Self = @This();
+        direct_attempts: usize = 0,
+        fn connect(ctx_ptr: *anyopaque, target: @import("integration/libfast.zig").ConnectionTarget) MeshError!libfast_adapter.ConnectionId {
+            const ctx: *Self = @ptrCast(@alignCast(ctx_ptr));
+            return switch (target) {
+                .direct => blk: {
+                    ctx.direct_attempts += 1;
+                    break :blk 7002;
+                },
+                .relay => MeshError.NotFound,
+            };
+        }
+        fn send(_: *anyopaque, _: libfast_adapter.ConnectionId, _: []const u8) MeshError!void {}
+        fn recv(_: *anyopaque, _: std.mem.Allocator, _: libfast_adapter.ConnectionId) MeshError!?[]u8 {
+            return null;
+        }
+        fn close(_: *anyopaque, _: libfast_adapter.ConnectionId) MeshError!void {}
+    };
+
+    var fake = Fake{};
+    const driver = libfast_adapter.Driver{
+        .ctx = &fake,
+        .vtable = &.{
+            .connect = Fake.connect,
+            .send = Fake.send,
+            .recv = Fake.recv,
+            .close = Fake.close,
+        },
+    };
+
+    const opened = try connectPeerViaDriverDefault(std.testing.allocator, resolved, driver);
+    try std.testing.expectEqual(routing_policy.Decision.direct, opened.result.decision);
+    try std.testing.expectEqual(@as(libfast_adapter.ConnectionId, 7002), opened.session.connection_id);
+    try std.testing.expect(!opened.used_relay_fallback);
+    try std.testing.expectEqual(@as(usize, 1), fake.direct_attempts);
 }
