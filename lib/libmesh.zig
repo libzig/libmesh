@@ -58,7 +58,11 @@ pub const integration = struct {
 pub const relay = struct {
     pub const bridge_datagrams = @import("relay/bridge_datagrams.zig");
     pub const bridge_streams = @import("relay/bridge_streams.zig");
+    pub const client = @import("relay/client.zig");
+    pub const matcher = @import("relay/matcher.zig");
+    pub const policy = @import("relay/policy.zig");
     pub const protocol = @import("relay/protocol.zig");
+    pub const server = @import("relay/server.zig");
     pub const session = @import("relay/session.zig");
 };
 
@@ -102,8 +106,12 @@ test "libmesh foundation imports libself and libfast" {
     _ = signaling.rendezvous;
     _ = signaling.server;
     _ = relay.bridge_datagrams;
+    _ = relay.client;
     _ = integration.libfast;
     _ = relay.bridge_streams;
+    _ = relay.matcher;
+    _ = relay.policy;
     _ = relay.protocol;
+    _ = relay.server;
     _ = relay.session;
 }
