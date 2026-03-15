@@ -40,6 +40,8 @@ pub const Message = struct {
 pub fn encode(allocator: std.mem.Allocator, msg: Message) MeshError![]u8 {
     if (msg.session_id == 0) return MeshError.InvalidPeerRecord;
     if (std.mem.indexOfScalar(u8, msg.payload, '|') != null) return MeshError.InvalidPeerRecord;
+    if (msg.kind == .open and msg.payload.len == 0) return MeshError.InvalidPeerRecord;
+    if (msg.kind == .close and msg.payload.len != 0) return MeshError.InvalidPeerRecord;
     return std.fmt.allocPrint(allocator, "{s}|{d}|{s}", .{
         msg.kind.asText(),
         msg.session_id,
@@ -57,6 +59,8 @@ pub fn decode(raw: []const u8) MeshError!Message {
     const kind = MessageKind.fromText(kind_text) orelse return MeshError.InvalidPeerRecord;
     const session_id = std.fmt.parseInt(u64, session_text, 10) catch return MeshError.InvalidPeerRecord;
     if (session_id == 0) return MeshError.InvalidPeerRecord;
+    if (kind == .open and payload.len == 0) return MeshError.InvalidPeerRecord;
+    if (kind == .close and payload.len != 0) return MeshError.InvalidPeerRecord;
 
     return .{
         .kind = kind,
@@ -91,4 +95,19 @@ test "relay protocol encode rejects delimiter in payload" {
         .session_id = 11,
         .payload = "node|target",
     }));
+}
+
+test "relay protocol enforces open and close payload semantics" {
+    try std.testing.expectError(MeshError.InvalidPeerRecord, encode(std.testing.allocator, .{
+        .kind = .open,
+        .session_id = 12,
+        .payload = "",
+    }));
+    try std.testing.expectError(MeshError.InvalidPeerRecord, decode("open|12|"));
+    try std.testing.expectError(MeshError.InvalidPeerRecord, encode(std.testing.allocator, .{
+        .kind = .close,
+        .session_id = 12,
+        .payload = "non-empty",
+    }));
+    try std.testing.expectError(MeshError.InvalidPeerRecord, decode("close|12|non-empty"));
 }
