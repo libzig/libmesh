@@ -46,6 +46,9 @@ pub const Server = struct {
         target_public_key: libself.identity.PublicKey,
         target_did: []const u8,
     ) MeshError!OpenResult {
+        for (self.sessions.items) |active| {
+            if (active.id == id) return MeshError.Duplicate;
+        }
         const relay_session = try session_api.openAuthenticated(
             id,
             source_public_key,
@@ -158,4 +161,28 @@ test "relay server close removes active session" {
     try std.testing.expectEqual(@as(usize, 0), matcher.pendingCount());
     try std.testing.expectEqual(@as(usize, 0), server.activeCount());
     try std.testing.expect(!server.close(7));
+}
+
+test "relay server rejects duplicate active session ids" {
+    var matcher = Matcher.init(std.testing.allocator);
+    defer matcher.deinit();
+    var server = Server.init(std.testing.allocator, &matcher, .{
+        .max_sessions = 4,
+        .require_authenticated = true,
+    });
+    defer server.deinit();
+
+    const source = try libself.identity.KeyPair.fromSeed([_]u8{0xb7} ** 32);
+    const target = try libself.identity.KeyPair.fromSeed([_]u8{0xb8} ** 32);
+    const allocator = std.testing.allocator;
+    const source_did = try libself.DidKey.fromKeyPair(source).encode(allocator);
+    defer allocator.free(source_did);
+    const target_did = try libself.DidKey.fromKeyPair(target).encode(allocator);
+    defer allocator.free(target_did);
+
+    _ = try server.open(55, source.public_key, source_did, target.public_key, target_did);
+    try std.testing.expectError(
+        MeshError.Duplicate,
+        server.open(55, source.public_key, source_did, target.public_key, target_did),
+    );
 }
