@@ -74,7 +74,9 @@ pub const SessionTransport = struct {
     pub fn recv(self: SessionTransport, allocator: std.mem.Allocator, session_id: u64) MeshError!protocol.Message {
         const response = try self.client.expectResponse(allocator, session_id);
         defer response.deinit(allocator);
-        return protocol.decode(response.envelope.payload);
+        const decoded = try protocol.decode(response.envelope.payload);
+        if (decoded.session_id != session_id) return MeshError.InvalidPeerRecord;
+        return decoded;
     }
 
     const PumpContext = struct {
@@ -168,6 +170,26 @@ test "relay session transport open can be denied by server policy" {
     try std.testing.expect(try transport.pumpServer(std.testing.allocator, false));
     const response = try transport.recv(std.testing.allocator, 901);
     try std.testing.expectEqual(protocol.MessageKind.deny, response.kind);
+}
+
+test "relay session transport recv rejects payload with mismatched session id" {
+    var bus = @import("../integration/session_bus.zig").SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    const transport = SessionTransport{
+        .client_id = "node-a",
+        .server_id = "mesh-relay",
+        .client = .{ .id = "node-a", .bus = &bus },
+        .server = .{ .id = "mesh-relay", .bus = &bus },
+    };
+
+    const bad_payload = try protocol.encode(std.testing.allocator, .{
+        .kind = .accept,
+        .session_id = 999,
+        .payload = "open-ok",
+    });
+    defer std.testing.allocator.free(bad_payload);
+    try transport.server.sendResponse(std.testing.allocator, "node-a", 904, .{ .relay_stream = true }, bad_payload);
+    try std.testing.expectError(MeshError.InvalidPeerRecord, transport.recv(std.testing.allocator, 904));
 }
 
 test "relay session transport rejects incompatible major versions" {
