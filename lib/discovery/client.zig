@@ -50,7 +50,12 @@ pub fn parseLookupResponse(allocator: std.mem.Allocator, raw_response: []const u
     const response = try protocol.decode(raw_response);
     if (response.kind != .response) return MeshError.InvalidPeerRecord;
     if (std.mem.eql(u8, response.payload, "not_found")) return MeshError.NotFound;
-    return peer_record.parseWirePayload(allocator, response.payload);
+    var parsed = try peer_record.parseWirePayload(allocator, response.payload);
+    if (!std.mem.eql(u8, response.node_hex, &parsed.record.node_id.toHex())) {
+        parsed.deinit();
+        return MeshError.InvalidPeerRecord;
+    }
+    return parsed;
 }
 
 test "discovery client builds lookup message with node hex id" {
@@ -130,4 +135,37 @@ test "discovery client parses lookup response peer records" {
     defer parsed.deinit();
     try std.testing.expect(parsed.record.signature != null);
     try std.testing.expect(try parsed.record.verify(std.testing.allocator, kp.public_key));
+}
+
+test "discovery client rejects lookup response when node hex does not match payload record" {
+    const kp = try libself.identity.KeyPair.fromSeed([_]u8{0xd9} ** 32);
+    const did = try libself.DidKey.fromKeyPair(kp).encode(std.testing.allocator);
+    defer std.testing.allocator.free(did);
+    const endpoints = [_]@import("../peer/endpoint.zig").PublishedEndpoint{
+        .{ .host = "203.0.113.52", .port = 4433 },
+    };
+    const hints = [_]@import("../peer/relay_hint.zig").RelayHint{
+        .{ .relay_id = "relay-client-mismatch", .relay_address = "relay.example.net:6443" },
+    };
+    var record = PeerRecord{
+        .node_id = libself.NodeId.fromPublicKey(kp.public_key),
+        .did = did,
+        .published_at_ms = 10,
+        .expires_at_ms = 100,
+        .endpoints = &endpoints,
+        .relay_hints = &hints,
+    };
+    try record.sign(std.testing.allocator, kp);
+    const wire = try record.wirePayloadAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(wire);
+
+    const response = try protocol.encode(std.testing.allocator, .{
+        .kind = .response,
+        .correlation_id = 5,
+        .node_hex = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        .payload = wire,
+    });
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expectError(MeshError.InvalidPeerRecord, parseLookupResponse(std.testing.allocator, response));
 }
