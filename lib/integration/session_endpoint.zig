@@ -94,6 +94,19 @@ pub const Endpoint = struct {
         return owned;
     }
 
+    pub fn expectRequest(self: Endpoint, allocator: std.mem.Allocator, correlation_id: u64) MeshError!OwnedEnvelope {
+        const owned = (try self.recvEnvelope(allocator)) orelse return MeshError.NotFound;
+        if (owned.envelope.kind != .request) {
+            owned.deinit(allocator);
+            return MeshError.InvalidPeerRecord;
+        }
+        if (owned.envelope.correlation_id != correlation_id) {
+            owned.deinit(allocator);
+            return MeshError.InvalidPeerRecord;
+        }
+        return owned;
+    }
+
     pub fn expectResponseFrom(
         self: Endpoint,
         allocator: std.mem.Allocator,
@@ -112,6 +125,33 @@ pub const Endpoint = struct {
         errdefer allocator.free(payload_storage);
         _ = std.fmt.hexToBytes(payload_storage, decoded.payload) catch return MeshError.InvalidPeerRecord;
         if (decoded.kind != .response or decoded.correlation_id != correlation_id) return MeshError.InvalidPeerRecord;
+
+        var envelope = decoded;
+        envelope.payload = payload_storage;
+        return .{
+            .envelope = envelope,
+            .payload_storage = payload_storage,
+        };
+    }
+
+    pub fn expectRequestFrom(
+        self: Endpoint,
+        allocator: std.mem.Allocator,
+        from: []const u8,
+        correlation_id: u64,
+    ) MeshError!OwnedEnvelope {
+        const packet = self.bus.recvFrom(self.id, from) orelse return MeshError.NotFound;
+        defer {
+            allocator.free(packet.from);
+            allocator.free(packet.to);
+            allocator.free(packet.payload);
+        }
+        const decoded = try control.decode(packet.payload);
+        if (decoded.payload.len % 2 != 0) return MeshError.InvalidPeerRecord;
+        const payload_storage = allocator.alloc(u8, decoded.payload.len / 2) catch return MeshError.BufferTooSmall;
+        errdefer allocator.free(payload_storage);
+        _ = std.fmt.hexToBytes(payload_storage, decoded.payload) catch return MeshError.InvalidPeerRecord;
+        if (decoded.kind != .request or decoded.correlation_id != correlation_id) return MeshError.InvalidPeerRecord;
 
         var envelope = decoded;
         envelope.payload = payload_storage;
@@ -184,4 +224,23 @@ test "session endpoint sendRequest/sendResponse and expectResponseFrom work toge
     const response = try client.expectResponseFrom(std.testing.allocator, "node-server", 13);
     defer response.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("ok", response.envelope.payload);
+}
+
+test "session endpoint expectRequest and expectRequestFrom validate source and correlation" {
+    var bus = SessionBus.init(std.testing.allocator);
+    defer bus.deinit();
+    const client = Endpoint{ .id = "node-client", .bus = &bus };
+    const server = Endpoint{ .id = "node-server", .bus = &bus };
+    const spoof = Endpoint{ .id = "node-spoof", .bus = &bus };
+
+    try client.sendRequest(std.testing.allocator, "node-server", 41, .{ .discovery = true }, "lookup");
+    const request = try server.expectRequest(std.testing.allocator, 41);
+    defer request.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("lookup", request.envelope.payload);
+
+    try client.sendRequest(std.testing.allocator, "node-server", 42, .{ .discovery = true }, "from-client");
+    try spoof.sendRequest(std.testing.allocator, "node-server", 42, .{ .discovery = true }, "spoofed");
+    const from_client = try server.expectRequestFrom(std.testing.allocator, "node-client", 42);
+    defer from_client.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("from-client", from_client.envelope.payload);
 }
