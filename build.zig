@@ -49,6 +49,42 @@ pub fn build(b: *std.Build) void {
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
+    const example_publish_module = b.createModule(.{
+        .root_source_file = b.path("examples/publish_lookup/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    example_publish_module.addImport("libmesh", libmesh_export);
+    const example_publish_tests = b.addTest(.{
+        .root_module = example_publish_module,
+    });
+    const run_example_publish_tests = b.addRunArtifact(example_publish_tests);
+
+    const example_signal_module = b.createModule(.{
+        .root_source_file = b.path("examples/signal_exchange/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    example_signal_module.addImport("libmesh", libmesh_export);
+    const example_signal_tests = b.addTest(.{
+        .root_module = example_signal_module,
+    });
+    const run_example_signal_tests = b.addRunArtifact(example_signal_tests);
+
+    const example_relay_module = b.createModule(.{
+        .root_source_file = b.path("examples/relay_pair/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    example_relay_module.addImport("libmesh", libmesh_export);
+    const example_relay_tests = b.addTest(.{
+        .root_module = example_relay_module,
+    });
+    const run_example_relay_tests = b.addRunArtifact(example_relay_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
+    test_step.dependOn(&run_example_publish_tests.step);
+    test_step.dependOn(&run_example_signal_tests.step);
+    test_step.dependOn(&run_example_relay_tests.step);
 }
