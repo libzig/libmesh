@@ -15,6 +15,7 @@ pub const PeerRecord = struct {
     signature: ?libself.identity.Signature = null,
 
     pub fn validate(self: PeerRecord, now_ms: mesh_time.TimestampMs) MeshError!void {
+        if (self.published_at_ms > now_ms) return MeshError.InvalidPeerRecord;
         if (self.expires_at_ms <= self.published_at_ms) return MeshError.InvalidPeerRecord;
         if (mesh_time.expired(now_ms, self.expires_at_ms)) return MeshError.Expired;
         if (self.did) |did| {
@@ -541,4 +542,22 @@ test "PeerRecord wire parser rejects duplicate signature fields" {
         "sig=;" ++
         "sig=;";
     try std.testing.expectError(MeshError.InvalidPeerRecord, parseWirePayload(std.testing.allocator, raw));
+}
+
+test "PeerRecord validate rejects future publish timestamps" {
+    const key_pair = try libself.identity.KeyPair.fromSeed([_]u8{0x2d} ** 32);
+    const endpoints = [_]PublishedEndpoint{
+        .{ .host = "198.51.100.130", .port = 4433, .priority = 1 },
+    };
+    const relay_hints = [_]RelayHint{
+        .{ .relay_id = "relay-time", .relay_address = "relay.example.net:7443", .priority = 1 },
+    };
+    const record = PeerRecord{
+        .node_id = libself.NodeId.fromPublicKey(key_pair.public_key),
+        .published_at_ms = 25,
+        .expires_at_ms = 40,
+        .endpoints = &endpoints,
+        .relay_hints = &relay_hints,
+    };
+    try std.testing.expectError(MeshError.InvalidPeerRecord, record.validate(24));
 }
